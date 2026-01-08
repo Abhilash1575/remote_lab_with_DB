@@ -46,9 +46,16 @@ fi
 VENV_PY="$PROJECT_DIR/venv/bin/python"
 VENV_PIP="$PROJECT_DIR/venv/bin/pip"
 
-echo -e "${YELLOW}Step 4: Installing Python dependencies (venv, PEP-668 safe)...${NC}"
+echo -e "${YELLOW}Step 4: echo -e "${YELLOW}Step 4: Installing Python dependencies (venv, PEP-668 safe)...${NC}"
+
+VENV_PY="$PROJECT_DIR/venv/bin/python"
+
+# Upgrade pip safely
 $VENV_PY -m pip install --upgrade pip
-$VENV_PIP install -r requirements.txt
+
+# Install requirements safely (DO NOT call pip directly)
+$VENV_PY -m pip install -r requirements.txt
+
 
 echo -e "${YELLOW}Step 5: Creating required directories...${NC}"
 mkdir -p uploads
