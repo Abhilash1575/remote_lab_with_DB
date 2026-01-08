@@ -3,7 +3,7 @@ Description=MJPG Streamer
 After=network.target
 
 [Service]
-ExecStart=/home/pi/mjpg-streamer/mjpg-streamer-experimental/mjpg_streamer -i "/home/pi/mjpg-streamer/mjpg-streamer-experimental/input_uvc.so -d /dev/video0 -y MJPG -r 1280x720 -q 100 -f 30" -o "/home/pi/mj$
+ExecStart=/usr/bin/ustreamer --device=/dev/video0 --format=mjpeg --resolution=1280x720 --port=8080 --persistent --host=0.0.0.0
 Restart=always
 User=pi
 
