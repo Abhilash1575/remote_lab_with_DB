@@ -1,16 +1,13 @@
-sudo tee /etc/systemd/system/vlabiisc.service > /dev/null <<EOF
 [Unit]
 Description=Virtual Embedded Lab
 After=network.target
 
 [Service]
-Type=simple
-User=$REAL_USER
-WorkingDirectory=$PROJECT_DIR
-ExecStart=$VENV_PY app.py
+User=pi
+WorkingDirectory=/home/pi/virtual_lab
+ExecStart=/home/pi/virtual_lab/venv/bin/python app.py
 Restart=always
-RestartSec=5
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
-EOF
