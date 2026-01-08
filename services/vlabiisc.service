@@ -4,11 +4,12 @@ Description=Virtual Embedded Lab
 After=network.target
 
 [Service]
+Type=simple
 User=$REAL_USER
 WorkingDirectory=$PROJECT_DIR
-ExecStart=$PROJECT_DIR/venv/bin/python app.py
+ExecStart=$VENV_PY app.py
 Restart=always
-Environment=PATH=$PROJECT_DIR/venv/bin:/usr/bin
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
