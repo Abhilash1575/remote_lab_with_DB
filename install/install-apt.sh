@@ -47,7 +47,7 @@ source venv/bin/activate
 
 echo -e "${YELLOW}Step 4: Installing Python dependencies...${NC}"
 if [ ! -f "venv/bin/pip" ]; then
-    curl -sSL https://bootstrap.pypa.io/get-pip.py | python3
+    curl -sSL https://bootstrap.pypa.io/get-pip.py | python
 fi
 pip install --upgrade pip
 pip install -r requirements.txt
