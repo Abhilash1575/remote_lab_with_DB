@@ -67,6 +67,7 @@ if [ -d "services" ]; then
             # Replace placeholders with actual values
             sudo sed -i "s|/home/pi|$HOME_DIR|g" "/etc/systemd/system/$service_name"
             sudo sed -i "s|User=%i|User=$REAL_USER|g" "/etc/systemd/system/$service_name"
+            sudo sed -i "s|%h|$HOME_DIR/$REAL_USER|g" "/etc/systemd/system/$service_name"
             sudo chmod 644 "/etc/systemd/system/$service_name"
         fi
     done

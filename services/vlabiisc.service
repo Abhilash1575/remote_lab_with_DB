@@ -1,6 +1,7 @@
 [Unit]
 Description=Virtual Embedded Lab
-After=network.target
+After=network.target audio_stream.service
+Requires=audio_stream.service
 
 [Service]
 User=%i
