@@ -1,16 +1,15 @@
-sudo tee /etc/systemd/system/audio_stream.service > /dev/null <<EOF
+
 [Unit]
 Description=Audio Streaming Server
 After=network.target
 
 [Service]
 Type=simple
-User=$REAL_USER
-WorkingDirectory=$PROJECT_DIR
-ExecStart=$VENV_PY $PROJECT_DIR/Audio/server.py
+User=pi
+WorkingDirectory=/home/pi/virtual_lab/audio
+ExecStart=/home/pi/virtual_lab/venv/bin/python3 /home/pi/virtual_lab/audio/server.py
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-EOF
