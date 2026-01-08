@@ -17,7 +17,7 @@ except Exception as e:
 from werkzeug.utils import secure_filename
 
 # ---------- CONFIG ----------
-BASE_DIR = os.path.expanduser('/home/pi/virtual_lab')  # base path as you specified
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # base path relative to script location
 UPLOAD_DIR = os.path.join(BASE_DIR, 'uploads')
 DEFAULT_FW_DIR = os.path.join(BASE_DIR, 'default_fw')  # contains esp32_default.bin etc
 SOP_DIR = os.path.join(BASE_DIR, 'static')      # contains exp.pdf

@@ -18,6 +18,7 @@ echo ""
 
 # Get the project directory (parent of install/)
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOME_DIR=$(dirname "$PROJECT_DIR")
 cd "$PROJECT_DIR"
 
 echo -e "${YELLOW}Step 1: Updating package index...${NC}"
@@ -73,6 +74,8 @@ if [ -d /run/systemd/system ]; then
                 service_name=$(basename "$service_file")
                 echo "  Installing $service_name..."
                 sudo cp "$service_file" /etc/systemd/system/
+                # Replace hardcoded /home/pi with actual home directory
+                sudo sed -i "s|/home/pi|$HOME_DIR|g" "/etc/systemd/system/$service_name"
                 sudo chmod 644 "/etc/systemd/system/$service_name"
             fi
         done
@@ -86,10 +89,10 @@ else
     echo "  Please configure services manually or install systemd"
     
     # Create a simple start script for OpenRC
-    cat > "$PROJECT_DIR/start-openrc.sh" << 'OPENRC_EOF'
+    cat > "$PROJECT_DIR/start-openrc.sh" << OPENRC_EOF
 #!/bin/bash
 # Start script for OpenRC systems
-cd /home/pi/virtual_lab
+cd "$PROJECT_DIR"
 source venv/bin/activate
 python app.py
 OPENRC_EOF
@@ -119,7 +122,7 @@ echo "To start the server (systemd):"
 echo "  sudo systemctl start vlabiisc"
 echo ""
 echo "To start the server (OpenRC):"
-echo "  cd /home/pi/virtual_lab && ./start-openrc.sh"
+echo "  cd \"$PROJECT_DIR\" && ./start-openrc.sh"
 echo ""
 echo "To check status:"
 echo "  sudo systemctl status vlabiisc"

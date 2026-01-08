@@ -18,6 +18,7 @@ echo ""
 
 # Get the project directory (parent of install/)
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOME_DIR=$(dirname "$PROJECT_DIR")
 cd "$PROJECT_DIR"
 
 echo -e "${YELLOW}Step 1: Updating system packages...${NC}"
@@ -69,6 +70,8 @@ if [ -d "services" ]; then
             service_name=$(basename "$service_file")
             echo "  Installing $service_name..."
             sudo cp "$service_file" /etc/systemd/system/
+            # Replace hardcoded /home/pi with actual home directory
+            sudo sed -i "s|/home/pi|$HOME_DIR|g" "/etc/systemd/system/$service_name"
             sudo chmod 644 "/etc/systemd/system/$service_name"
         fi
     done
