@@ -49,8 +49,8 @@ echo -e "${YELLOW}Step 4: Installing Python dependencies...${NC}"
 if [ ! -f "venv/bin/pip" ]; then
     curl -sSL https://bootstrap.pypa.io/get-pip.py | python
 fi
-pip install --upgrade pip
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
 echo -e "${YELLOW}Step 5: Creating required directories...${NC}"
 mkdir -p uploads
