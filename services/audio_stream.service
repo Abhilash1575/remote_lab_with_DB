@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=%i
-WorkingDirectory=%h/virtual_lab/Audio
-ExecStart=%h/virtual_lab/venv/bin/python3 %h/virtual_lab/Audio/server.py
+WorkingDirectory=/home/pi/virtual_lab/Audio
+ExecStart=/home/pi/virtual_lab/venv/bin/python3 /home/pi/virtual_lab/Audio/server.py
 Restart=always
 RestartSec=5
 

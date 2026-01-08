@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 User=%i
-WorkingDirectory=%h/virtual_lab
-ExecStart=%h/virtual_lab/venv/bin/python app.py
+WorkingDirectory=/home/pi/virtual_lab
+ExecStart=/home/pi/virtual_lab/venv/bin/python app.py
 Restart=always
 Environment=PYTHONUNBUFFERED=1
 
