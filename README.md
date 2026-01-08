@@ -2,6 +2,24 @@
 
 A Flask-based web application for remote access to embedded systems laboratories with support for multiple microcontroller boards, WebRTC audio streaming, and real-time sensor data visualization.
 
+## Supported Operating Systems
+
+The `install.sh` script is designed for **Debian-based Linux distributions only**:
+
+| OS | Compatible | Package Manager | Init System |
+|-----|------------|-----------------|-------------|
+| Raspberry Pi OS | ✅ Yes | apt | systemd |
+| Debian | ✅ Yes | apt | systemd |
+| Ubuntu | ✅ Yes | apt | systemd |
+| Diet Pi | ✅ Yes | apt | systemd |
+| Armbian | ✅ Yes (most) | apt | systemd |
+| Fedora | ❌ No | dnf | systemd |
+| Alpine Linux | ❌ No | apk | OpenRC/runits |
+| Arch Linux | ❌ No | pacman | systemd |
+| Windows | ❌ No | - | - |
+
+For non-Debian systems, use **Manual Installation** below.
+
 ## Features
 
 - **Multi-board Support**: ESP32, ESP8266, Arduino, ATtiny, STM32, MSP430, TIVA, and more
