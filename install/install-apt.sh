@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Virtual Embedded Lab - APT-based Installer
-# Compatible with Raspberry Pi OS & Ubuntu (22.04+)
-# For: Debian, Raspberry Pi OS, Ubuntu, Linux Mint, Pop!_OS, etc.
+# FINAL dual-compatible version (Ubuntu + Raspberry Pi OS)
 
 set -e
 
@@ -17,7 +16,7 @@ echo "Installing for APT-based Linux"
 echo "========================================"
 echo ""
 
-# Get the project directory (parent of install/)
+# Get project root directory
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
@@ -26,6 +25,7 @@ sudo apt update && sudo apt upgrade -y
 
 echo -e "${YELLOW}Step 2: Installing system dependencies...${NC}"
 sudo apt install -y \
+    python3 \
     python3-pip \
     python3-venv \
     python3-dev \
@@ -43,14 +43,12 @@ if [ ! -d "venv" ]; then
     python3 -m venv venv
 fi
 
-# Activate venv
-source venv/bin/activate
+VENV_PY="$PROJECT_DIR/venv/bin/python"
+VENV_PIP="$PROJECT_DIR/venv/bin/pip"
 
-echo -e "${YELLOW}Step 4: Installing Python dependencies in virtual environment...${NC}"
-# Upgrade pip inside venv
-python -m pip install --upgrade pip
-# Install requirements inside venv
-python -m pip install -r requirements.txt
+echo -e "${YELLOW}Step 4: Installing Python dependencies (venv, PEP-668 safe)...${NC}"
+$VENV_PY -m pip install --upgrade pip
+$VENV_PIP install -r requirements.txt
 
 echo -e "${YELLOW}Step 5: Creating required directories...${NC}"
 mkdir -p uploads
@@ -58,36 +56,31 @@ mkdir -p default_fw
 mkdir -p static/sop
 
 echo -e "${YELLOW}Step 6: Setting up systemd services...${NC}"
-# Copy service files from services folder
 if [ -d "services" ]; then
     for service_file in services/*.service; do
-        if [ -f "$service_file" ]; then
-            service_name=$(basename "$service_file")
-            echo "  Installing $service_name..."
-            sudo cp "$service_file" /etc/systemd/system/
-            sudo chmod 644 "/etc/systemd/system/$service_name"
-        fi
+        service_name=$(basename "$service_file")
+        echo "  Installing $service_name..."
+        sudo cp "$service_file" /etc/systemd/system/
+        sudo chmod 644 "/etc/systemd/system/$service_name"
     done
 else
     echo -e "${RED}Error: services folder not found!${NC}"
     exit 1
 fi
 
-# Reload systemd and enable all services
 sudo systemctl daemon-reload
 sudo systemctl enable vlabiisc.service audio_stream.service mjpg-streamer.service
 
 echo -e "${YELLOW}Step 7: Configuring permissions...${NC}"
-sudo usermod -a -G dialout $USER
+sudo usermod -a -G dialout "$USER"
 
 echo -e "${YELLOW}Step 8: Fixing ALSA config for venv...${NC}"
-# Create ALSA config directory for virtual environment
 sudo mkdir -p /tmp/vendor/share/alsa
 sudo cp -r /usr/share/alsa/* /tmp/vendor/share/alsa/
 
 echo ""
 echo "========================================"
-echo "✅ APT installation completed!"
+echo "✅ INSTALLATION COMPLETED SUCCESSFULLY"
 echo "========================================"
 echo ""
 echo "To start the server:"
@@ -99,5 +92,5 @@ echo ""
 echo "To view logs:"
 echo "  sudo journalctl -u vlabiisc -f"
 echo ""
-echo -e "${YELLOW}Note: Please reboot for serial port permissions to take effect${NC}"
+echo -e "${YELLOW}Reboot required for serial permissions${NC}"
 echo "  sudo reboot"
