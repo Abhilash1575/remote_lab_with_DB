@@ -28,7 +28,7 @@ def get_available_audio_devices():
                     devices.append(line.strip())
     except Exception as e:
         print(f"Error getting audio devices: {e}")
-    
+
     try:
         # Also try arecord -l
         result = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
@@ -38,8 +38,28 @@ def get_available_audio_devices():
                     devices.append(f"MIC: {line.strip()}")
     except Exception as e:
         print(f"Error getting recording devices: {e}")
-    
+
     return devices
+
+def get_capture_cards():
+    """Get list of available capture card numbers"""
+    cards = []
+    try:
+        result = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if line.startswith('card '):
+                    # Extract card number: "card 1: Audio [Lenovo FHD Webcam Audio]"
+                    parts = line.split(':')
+                    if len(parts) > 0:
+                        card_num = parts[0].replace('card ', '').strip()
+                        try:
+                            cards.append(int(card_num))
+                        except ValueError:
+                            pass
+    except Exception as e:
+        print(f"Error getting capture cards: {e}")
+    return cards
 
 class SilenceAudioTrack(MediaStreamTrack):
     kind = "audio"
@@ -87,57 +107,63 @@ async def get_audio_track(pc):
             return None
 
     def try_alsa_hw():
-        try:
-            options = {
-                "format": "s16le",
-                "rate": "48000",
-                "channels": "2"
-            }
-            player = MediaPlayer("plughw:2,0", format="alsa", options=options)
-            return player.audio
-        except:
-            return None
+        capture_cards = get_capture_cards()
+        for card in capture_cards:
+            try:
+                options = {
+                    "format": "s16le",
+                    "rate": "48000",
+                    "channels": "2"
+                }
+                player = MediaPlayer(f"plughw:{card},0", format="alsa", options=options)
+                return player.audio
+            except:
+                continue
+        return None
 
     def try_subprocess():
-        try:
-            import subprocess
+        capture_cards = get_capture_cards()
+        for card in capture_cards:
+            try:
+                import subprocess
 
-            # Use ffmpeg directly with ALSA input - bypasses broken Python ALSA
-            # ffmpeg captures from hw:2,0, resamples, and outputs to stdout
-            cmd_ffmpeg = [
-                "ffmpeg",
-                "-f", "alsa", "-i", "hw:2,0",
-                "-ar", "48000", "-ac", "1", "-f", "s16le",
-                "-fflags", "nobuffer", "-flags", "low_delay",
-                "-bufsize", "1000",
-                "pipe:1"
-            ]
-            proc_ffmpeg = subprocess.Popen(
-                cmd_ffmpeg, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.DEVNULL
-            )
+                # Use ffmpeg directly with ALSA input - bypasses broken Python ALSA
+                # ffmpeg captures from detected hw card, resamples, and outputs to stdout
+                cmd_ffmpeg = [
+                    "ffmpeg",
+                    "-f", "alsa", "-i", f"hw:{card},0",
+                    "-ar", "48000", "-ac", "1", "-f", "s16le",
+                    "-fflags", "nobuffer", "-flags", "low_delay",
+                    "-bufsize", "1000",
+                    "pipe:1"
+                ]
+                proc_ffmpeg = subprocess.Popen(
+                    cmd_ffmpeg,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL
+                )
 
-            # Store process for cleanup
-            pc.proc_ffmpeg = proc_ffmpeg
+                # Store process for cleanup
+                pc.proc_ffmpeg = proc_ffmpeg
 
-            # Start monitoring task for subprocess health
-            asyncio.create_task(monitor_subprocesses(pc))
+                # Start monitoring task for subprocess health
+                asyncio.create_task(monitor_subprocesses(pc))
 
-            player = MediaPlayer(
-                proc_ffmpeg.stdout,
-                format="s16le",
-                options={
-                    "sample_rate": "48000",
-                    "channels": "1",
-                    "fflags": "nobuffer",
-                    "flags": "low_delay"
-                }
-            )
-            return player.audio
-        except Exception as e:
-            print(f"Subprocess method failed: {e}")
-            return None
+                player = MediaPlayer(
+                    proc_ffmpeg.stdout,
+                    format="s16le",
+                    options={
+                        "sample_rate": "48000",
+                        "channels": "1",
+                        "fflags": "nobuffer",
+                        "flags": "low_delay"
+                    }
+                )
+                return player.audio
+            except Exception as e:
+                print(f"Subprocess method failed for card {card}: {e}")
+                continue
+        return None
 
     # Use threading to try audio sources concurrently
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
