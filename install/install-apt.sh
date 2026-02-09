@@ -91,7 +91,7 @@ fi
 
 # Reload systemd and enable all services
 sudo systemctl daemon-reload
-sudo systemctl enable vlabiisc.service audio_stream.service mjpg-streamer.service
+sudo systemctl enable vlabiisc.service audio_stream.service mjpg-streamer.service dfrobot-ups.service
 
 echo -e "${YELLOW}Step 7: Configuring permissions...${NC}"
 sudo usermod -a -G dialout $USER

@@ -44,7 +44,7 @@ sudo apt install -y \
     python3-smbus \
     python3-pip
 
-pip3 install --break-system-packages smbus2
+pip3 install --break-system-packages smbus2 RPi.GPIO
 
 echo "✅ Packages installed"
 
@@ -52,72 +52,17 @@ echo "✅ Packages installed"
 echo "🔍 Scanning I2C bus..."
 i2cdetect -y 1 || true
 
-### 5️⃣ UPS MONITOR (AUTO-DETECT) ###
+### 5️⃣ UPS MONITOR ###
 echo "🧠 Installing UPS monitor..."
 
-UPS_PY="/usr/local/bin/dfrobot_ups.py"
+# Get project and home directories
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOME_DIR=$(dirname "$PROJECT_DIR")
+REAL_USER=$(basename "$HOME_DIR")
 
-sudo tee "$UPS_PY" > /dev/null << 'EOF'
-#!/usr/bin/env python3
-import time
-from smbus2 import SMBus
+UPS_PY="$PROJECT_DIR/dfrobot_ups.py"
 
-BUS = 1
-ADDR_MAX17048 = 0x36
-ADDR_INA219   = 0x40
-
-def swap16(x):
-    return ((x & 0xFF) << 8) | (x >> 8)
-
-bus = SMBus(BUS)
-
-def max17048_soc():
-    try:
-        raw = bus.read_word_data(ADDR_MAX17048, 0x04)
-        return swap16(raw) / 256.0
-    except:
-        return None
-
-def ina219_voltage():
-    try:
-        raw = bus.read_word_data(ADDR_INA219, 0x02)
-        return swap16(raw) * 0.00125
-    except:
-        return None
-
-def ina219_current():
-    try:
-        raw = bus.read_word_data(ADDR_INA219, 0x04)
-        val = swap16(raw)
-        if val > 32767:
-            val -= 65536
-        return val * 0.001
-    except:
-        return None
-
-def ac_status(current):
-    if current is None:
-        return "UNKNOWN"
-    return "AC_CONNECTED" if current > 0 else "ON_BATTERY"
-
-print("DFRobot UPS Monitor started")
-
-while True:
-    soc = max17048_soc()
-    voltage = ina219_voltage()
-    current = ina219_current()
-    ac = ac_status(current)
-
-    print(
-        f"🔋 SOC: {soc if soc is not None else 'N/A'}% | "
-        f"⚡ Voltage: {voltage if voltage else 'N/A'} V | "
-        f"🔌 Current: {current if current else 'N/A'} A | "
-        f"🔄 Power: {ac}"
-    )
-
-    time.sleep(5)
-EOF
-
+# Ensure the Python file has executable permissions
 sudo chmod +x "$UPS_PY"
 
 echo "✅ UPS monitor installed"
@@ -125,20 +70,18 @@ echo "✅ UPS monitor installed"
 ### 6️⃣ SYSTEMD SERVICE ###
 echo "⚙️ Creating service..."
 
-sudo tee /etc/systemd/system/dfrobot-ups.service > /dev/null << EOF
-[Unit]
-Description=DFRobot UPS Monitor
-After=multi-user.target
+SERVICE_FILE="$PROJECT_DIR/services/dfrobot-ups.service"
+SYSTEMD_SERVICE="/etc/systemd/system/dfrobot-ups.service"
 
-[Service]
-ExecStart=/usr/bin/python3 /usr/local/bin/dfrobot_ups.py
-Restart=always
-RestartSec=3
-User=$REAL_USER
+sudo cp "$SERVICE_FILE" "$SYSTEMD_SERVICE"
 
-[Install]
-WantedBy=multi-user.target
-EOF
+# Update the service file with correct paths and user
+PROJECT_DIR_ESC=$(printf '%s\n' "$PROJECT_DIR" | sed -e 's/[\/&]/\\&/g')
+HOME_DIR_ESC=$(printf '%s\n' "$HOME_DIR" | sed -e 's/[\/&]/\\&/g')
+
+sudo sed -i "s|%h|$HOME_DIR_ESC|g" "$SYSTEMD_SERVICE"
+sudo sed -i "s|User=%i|User=$REAL_USER|g" "$SYSTEMD_SERVICE"
+sudo chmod 644 "$SYSTEMD_SERVICE"
 
 sudo systemctl daemon-reload
 sudo systemctl enable dfrobot-ups.service
