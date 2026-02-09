@@ -1,0 +1,25 @@
+# Log files
+ups_log.csv
+
+# Temporary files
+*.tmp
+*.temp
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Audio files
+Audio/*.wav
+Audio/*.mp3
+
+# Certificates
+cert.pem
+key.pem
+
+# Swap files
+*.swp
