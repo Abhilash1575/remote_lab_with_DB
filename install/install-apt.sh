@@ -96,7 +96,20 @@ sudo systemctl enable vlabiisc.service audio_stream.service mjpg-streamer.servic
 echo -e "${YELLOW}Step 7: Configuring permissions...${NC}"
 sudo usermod -a -G dialout $USER
 
-echo -e "${YELLOW}Step 8: Fixing ALSA config for venv...${NC}"
+echo -e "${YELLOW}Step 8: Installing DFRobot UPS support (Raspberry Pi only)...${NC}"
+# Check if we're running on Raspberry Pi (detect arm architecture and /proc/device-tree/model)
+if [ "$(uname -m)" = "armv7l" ] || [ "$(uname -m)" = "aarch64" ]; then
+    if [ -f "/proc/device-tree/model" ] && grep -q "Raspberry" "/proc/device-tree/model"; then
+        echo -e "${GREEN}✅ Detected Raspberry Pi - Installing DFRobot UPS support${NC}"
+        REAL_USER="$REAL_USER" bash "$PROJECT_DIR/install/rpi_dfrobot_ups_all_in_one.sh"
+    else
+        echo -e "${YELLOW}⚠️ Not a Raspberry Pi - Skipping DFRobot UPS installation${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️ Not ARM architecture - Skipping DFRobot UPS installation${NC}"
+fi
+
+echo -e "${YELLOW}Step 9: Fixing ALSA config for venv...${NC}"
 # Create ALSA config directory for virtual environment
 sudo mkdir -p /tmp/vendor/share/alsa
 sudo cp -r /usr/share/alsa/* /tmp/vendor/share/alsa/
