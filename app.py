@@ -133,8 +133,7 @@ def add_session():
             'duration': duration,
             'expires_at': time.time() + (duration * 60)
         }
-        # Turn relay ON when session starts
-        relay_on()
+        # Do NOT turn relay ON automatically when session starts
     return jsonify({'status': 'added'})
 
 @app.route('/remove_session', methods=['POST'])
@@ -143,9 +142,28 @@ def remove_session():
     session_key = data.get('session_key')
     if session_key in active_sessions:
         del active_sessions[session_key]
-        # Turn relay OFF when session is explicitly removed
-        relay_off()
+        # Do NOT turn relay OFF automatically when session is removed
     return jsonify({'status': 'removed'})
+
+@app.route('/toggle_relay', methods=['POST'])
+def toggle_relay():
+    """Toggle the relay ON or OFF based on request data"""
+    data = request.get_json()
+    state = data.get('state')
+    session_key = data.get('session_key')
+    
+    # Check if session is valid
+    if session_key not in active_sessions:
+        return jsonify({'status': 'error', 'message': 'Invalid session'}), 400
+    
+    if state == 'on':
+        success = relay_on()
+        return jsonify({'status': 'on' if success else 'error'})
+    elif state == 'off':
+        success = relay_off()
+        return jsonify({'status': 'off' if success else 'error'})
+    else:
+        return jsonify({'status': 'error', 'message': 'Invalid state'}), 400
 
 @app.route('/chart')
 def chart():

@@ -103,6 +103,9 @@ button{padding:8px 10px;border-radius:6px;border:none;cursor:pointer}
 
         <!-- View / Download SOP -->
         <button id="viewSopBtn" class="primary">View SOP</button>
+
+        <!-- Power Supply Control -->
+        <button id="powerSupplyBtn" class="primary" style="background:#2ecc71; color:#1c1c2b">Power Supply OFF</button>
       </div>
       <div style="font-size:13px;color:#9aaab4"></div>
     </div>
@@ -269,6 +272,37 @@ const boardType = document.getElementById('boardType');
 
 const factoryResetBtn = document.getElementById('factoryResetBtn');
 const viewSopBtn = document.getElementById('viewSopBtn');
+const powerSupplyBtn = document.getElementById('powerSupplyBtn');
+
+/* ----------------- POWER SUPPLY CONTROL ----------------- */
+let powerSupplyState = 'off'; // Initial state is OFF
+
+powerSupplyBtn.addEventListener('click', async () => {
+  try {
+    const newState = powerSupplyState === 'off' ? 'on' : 'off';
+    const response = await fetch('/toggle_relay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        state: newState,
+        session_key: sessionKey
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.status === newState) {
+      powerSupplyState = newState;
+      powerSupplyBtn.innerText = `Power Supply ${newState.toUpperCase()}`;
+      powerSupplyBtn.style.background = newState === 'on' ? '#ff6b6b' : '#2ecc71';
+      feedbackAdd(`[power] Power supply turned ${newState}`);
+    } else {
+      feedbackAdd(`[power] Error turning power ${newState}: ${result.message || 'Unknown error'}`);
+    }
+  } catch (error) {
+    feedbackAdd(`[power] Request failed: ${error}`);
+  }
+});
 
 const pauseChartBtn = document.getElementById('pauseChart');
 const exportCSVBtn = document.getElementById('exportCSV');
