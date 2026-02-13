@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+import sys
+
+# Import lgpio FIRST before eventlet patches anything!
+try:
+    import lgpio
+    RELAY_PIN = 26
+except Exception as e:
+    print(f"lgpio import failed: {e}")
+    lgpio = None
+    RELAY_PIN = None
+
 import eventlet
 eventlet.monkey_patch()
 
@@ -37,6 +48,49 @@ ser = None
 ser_stop = threading.Event()
 data_generator_thread = None  # global mock generator
 
+# ---------- RELAY CONTROL ----------
+# Keep a persistent handle to GPIO chip to prevent issues with repeated calls
+gpio_handle = None
+
+def init_gpio():
+    """Initialize GPIO chip handle"""
+    global gpio_handle
+    if lgpio is None or RELAY_PIN is None:
+        return False
+    try:
+        if gpio_handle is None:
+            gpio_handle = lgpio.gpiochip_open(0)
+            lgpio.gpio_claim_output(gpio_handle, RELAY_PIN)
+        return True
+    except Exception as e:
+        print(f"Error initializing GPIO: {e}")
+        gpio_handle = None
+        return False
+
+def relay_on():
+    """Turn the relay ON (power supply to experiments)"""
+    if not init_gpio():
+        return False
+    try:
+        lgpio.gpio_write(gpio_handle, RELAY_PIN, 0)  # Most relay modules are ACTIVE LOW
+        print("Relay ON")
+        return True
+    except Exception as e:
+        print(f"Error turning relay ON: {e}")
+        return False
+
+def relay_off():
+    """Turn the relay OFF (power supply to experiments off)"""
+    if not init_gpio():
+        return False
+    try:
+        lgpio.gpio_write(gpio_handle, RELAY_PIN, 1)  # Most relay modules are ACTIVE LOW
+        print("Relay OFF")
+        return True
+    except Exception as e:
+        print(f"Error turning relay OFF: {e}")
+        return False
+
 # ---------- UTIL ----------
 def list_serial_ports():
     if list_ports is None:
@@ -58,6 +112,8 @@ def experiment():
     expired_keys = [k for k, v in active_sessions.items() if current_time > v['expires_at']]
     for k in expired_keys:
         del active_sessions[k]
+        # Turn relay OFF when session expires
+        relay_off()
 
     if session_key not in active_sessions:
         return render_template('expired_session.html')
@@ -77,6 +133,8 @@ def add_session():
             'duration': duration,
             'expires_at': time.time() + (duration * 60)
         }
+        # Turn relay ON when session starts
+        relay_on()
     return jsonify({'status': 'added'})
 
 @app.route('/remove_session', methods=['POST'])
@@ -85,6 +143,8 @@ def remove_session():
     session_key = data.get('session_key')
     if session_key in active_sessions:
         del active_sessions[session_key]
+        # Turn relay OFF when session is explicitly removed
+        relay_off()
     return jsonify({'status': 'removed'})
 
 @app.route('/chart')
@@ -94,6 +154,8 @@ def chart():
     expired_keys = [k for k, v in active_sessions.items() if current_time > v['expires_at']]
     for k in expired_keys:
         del active_sessions[k]
+        # Turn relay OFF when session expires
+        relay_off()
 
     session_key = request.args.get('key')
     if not session_key or session_key not in active_sessions:
@@ -107,6 +169,8 @@ def camera():
     expired_keys = [k for k, v in active_sessions.items() if current_time > v['expires_at']]
     for k in expired_keys:
         del active_sessions[k]
+        # Turn relay OFF when session expires
+        relay_off()
 
     session_key = request.args.get('key')
     if not session_key or session_key not in active_sessions:
@@ -303,7 +367,6 @@ def on_connect():
     emit('ports_list', list_serial_ports())
     emit('feedback', 'Server: socket connected')
 
-
 @socketio.on('list_ports')
 def handle_list_ports():
     emit('ports_list', list_serial_ports())
@@ -399,21 +462,21 @@ if __name__ == '__main__':
         else:
             print(f"✗ {name} is NOT running on port {port}")
             return False
-    
+
     print("========================================")
     print("Virtual Lab Server Starting...")
     print("========================================")
-    
+
     audio_running = check_port(9000, "Audio server")
     if not audio_running:
         print("\n⚠️  Audio service not detected!")
         print("   To enable audio, run:")
         print("   sudo systemctl enable audio_stream.service")
         print("   sudo systemctl start audio_stream.service")
-    
+
     print("\nStarting Flask server on port 5000...")
     print("========================================")
-    
+
     try:
         socketio.run(app, host='0.0.0.0', port=5000)
     finally:

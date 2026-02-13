@@ -561,14 +561,14 @@ function createControlElement(cfg){
     let fixedVar = cfg.dataKey || varSelect.value; // lock selected variable
 
     slider.oninput = () => {
-  valSpan.innerText = slider.value;
-  const cmd = `${slider.value}`;  // ✅ send ONLY the numeric value
-  if (sliderTimeout) clearTimeout(sliderTimeout);
-  sliderTimeout = setTimeout(() => {
-    socket.emit('send_command', { cmd });
-    feedbackAdd(`(slider ${fixedVar}) sent value: ${cmd}`);
-  }, 120);
-};
+      valSpan.innerText = slider.value;
+      const cmd = `${slider.value}`;  // ✅ send ONLY the numeric value
+      if (sliderTimeout) clearTimeout(sliderTimeout);
+      sliderTimeout = setTimeout(() => {
+        socket.emit('send_command', { cmd });
+        feedbackAdd(`(slider ${fixedVar}) sent value: ${cmd}`);
+      }, 120);
+    };
 
 
     content.appendChild(varSelect);
@@ -1275,6 +1275,13 @@ if (!sessionKey) {
         document.getElementById('sessionClosed').style.display = 'flex';
         document.querySelector('.container').style.display = 'none';
         document.querySelector('.header-bar').style.display = 'none';
+
+        // Send request to server to remove session and turn off relay
+        fetch('/remove_session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_key: sessionKey })
+        });
 
         // Close all opened windows
         openedWindows.forEach(win => {
