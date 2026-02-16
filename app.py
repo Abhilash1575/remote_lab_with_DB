@@ -107,6 +107,14 @@ def experiment():
     if not session_key:
         return render_template('expired_session.html')
 
+    # For testing purposes: if session key is 'testpop123', create a temporary session
+    if session_key == 'testpop123' and session_key not in active_sessions:
+        active_sessions[session_key] = {
+            'start_time': time.time(),
+            'duration': 0.08,  # 5 seconds
+            'expires_at': time.time() + (0.08 * 60)
+        }
+
     # Clean up expired sessions
     current_time = time.time()
     expired_keys = [k for k, v in active_sessions.items() if current_time > v['expires_at']]
