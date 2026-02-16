@@ -142,7 +142,8 @@ def remove_session():
     session_key = data.get('session_key')
     if session_key in active_sessions:
         del active_sessions[session_key]
-        # Do NOT turn relay OFF automatically when session is removed
+        # Turn relay OFF automatically when session is removed to save power
+        relay_off()
     return jsonify({'status': 'removed'})
 
 @app.route('/toggle_relay', methods=['POST'])
