@@ -1,0 +1,51 @@
+{
+  "admin": {
+    "server_ip": "127.0.0.1",
+    "server_port": 5000,
+    "enable_ssl": false,
+    "ssl_cert": "cert.pem",
+    "ssl_key": "key.pem"
+  },
+  "lab": {
+    "device_name": "Lab Pi 1",
+    "device_type": "raspberry-pi-4",
+    "mac_address": "B8:27:EB:12:34:56",
+    "ip_address": "127.0.0.1",
+    "location": "Lab Room A",
+    "experiment_capabilities": [1, 2, 3],
+    "heartbeat_interval": 10,
+    "timeout": 30
+  },
+  "database": {
+    "type": "sqlite",
+    "path": "vlab.db",
+    "host": "",
+    "port": "",
+    "name": "",
+    "username": "",
+    "password": ""
+  },
+  "mqtt": {
+    "enabled": false,
+    "broker": "localhost",
+    "port": 1883,
+    "username": "",
+    "password": "",
+    "topic_prefix": "vlab/"
+  },
+  "hardware": {
+    "relay_pin": 26,
+    "serial_ports": ["/dev/ttyUSB0", "/dev/ttyACM0"],
+    "baud_rates": [9600, 115200],
+    "camera_enabled": true,
+    "camera_port": 8080,
+    "audio_enabled": true,
+    "audio_port": 9000
+  },
+  "security": {
+    "api_key": "your-api-key-here",
+    "enable_authentication": true,
+    "max_session_duration": 3600,
+    "emergency_shutdown_pin": 17
+  }
+}
