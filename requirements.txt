@@ -1,20 +1,14 @@
-# Flask and Web Framework
-Flask>=2.3.0
-Flask-SocketIO>=5.3.0
-eventlet>=0.33.0
-
-# WebRTC Audio Server
-aiortc>=1.5.0
-aiohttp>=3.8.0
-av>=10.0.0
-
-# Serial Communication
-pyserial>=3.5.0
-
-# File Uploads
-Werkzeug>=2.3.0
-
-# Additional utilities
-python-socketio>=5.8.0
-python-engineio>=4.5.0
-lgpio>=0.2.2.0
+Flask==2.3.0
+Flask-SQLAlchemy==3.0.5
+Flask-Bcrypt==1.0.1
+Flask-Login==0.6.3
+Flask-Mail==0.9.1
+Flask-SocketIO==5.3.0
+eventlet==0.40.4
+pyserial==3.5
+lgpio==0.2.2.0
+Werkzeug==2.3.0
+python-dateutil==2.8.2
+psutil==5.9.6
+smbus2==0.4.3
+gpiozero==1.6.2

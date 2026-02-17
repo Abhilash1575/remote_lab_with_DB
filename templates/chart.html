@@ -40,23 +40,6 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', sans-serif; backgrou
 <canvas id="mainChart" class="fullscreen-chart"></canvas>
 
 <script>
-// Session monitoring - auto-close when session ends
-function checkSessionStatus() {
-    // Check if there are any active sessions running
-    const keys = Object.keys(localStorage);
-    const activeSessions = keys.filter(key => key.startsWith('sessionStatus_') && localStorage.getItem(key) === 'IN_PROGRESS');
-    const completedSessions = keys.filter(key => key.startsWith('sessionStatus_') && localStorage.getItem(key) === 'COMPLETED');
-
-    // Only close if there are completed sessions AND no active sessions running
-    if (completedSessions.length > 0 && activeSessions.length === 0) {
-        // All sessions have ended, close this window
-        window.close();
-    }
-}
-
-// Check session status every 5 seconds
-setInterval(checkSessionStatus, 5000);
-
 document.getElementById('backBtn').addEventListener('click', () => {
     window.close();
 });

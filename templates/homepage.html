@@ -223,7 +223,6 @@
             margin: 0; 
             color: var(--color-secondary); 
             font-weight: 600; 
-            /* REDUCED FONT SIZE for experiment titles */
             font-size: 1.2em; 
             margin-bottom: 5px;
             padding-bottom: 10px;
@@ -231,7 +230,6 @@
         }
         .exp-title .sop { 
             margin: 15px 0 0 0; 
-            /* REDUCED FONT SIZE for SOP description */
             font-size: 0.9em; 
             color: var(--color-text-subtle); 
             line-height: 1.5; 
@@ -247,14 +245,12 @@
         
         /* Booking Button */
         .book-btn { 
-            /* REDUCED VERTICAL PADDING */
             padding: 12px 30px; 
             border: none; 
             border-radius: 8px; 
             cursor: pointer; 
             background: var(--color-primary); 
             color: var(--color-secondary); 
-            /* REDUCED FONT SIZE & WEIGHT for button text */
             font-size: 0.95em; 
             font-weight: 700; 
             transition: background 0.3s, transform 0.2s; 
@@ -411,13 +407,15 @@
     </div>
 
     <div class="auth-bar">
-        <button id="loginBtn" onclick="openAuthModal()">
-            Login / Signup <i class="fas fa-sign-in-alt"></i>
-        </button>
-
-        <button id="logoutBtn" onclick="logoutUser()" style="display:none;">
-            Logout <i class="fas fa-sign-out-alt"></i>
-        </button>
+        {% if current_user.is_authenticated %}
+            <button id="logoutBtn" onclick="window.location.href='{{ url_for('logout') }}'">
+                Logout <i class="fas fa-sign-out-alt"></i>
+            </button>
+        {% else %}
+            <button id="loginBtn" onclick="window.location.href='{{ url_for('login') }}'">
+                Login / Signup <i class="fas fa-sign-in-alt"></i>
+            </button>
+        {% endif %}
     </div>
 
     <div class="container">
@@ -435,10 +433,39 @@
         </div>
     </div>
 
-    <div id="myBookings" class="container" style="display:none; padding-top:20px;">
+    {% if current_user.is_authenticated %}
+    <div id="myBookings" class="container" style="padding-top:20px;">
         <h2><i class="fas fa-calendar-alt"></i> My Booked Slots</h2>
-        <div id="bookingsList" style="font-size:1em; color:var(--color-text-dark);"></div>
+        <div id="bookingsList">
+            {% if bookings %}
+                {% for booking in bookings %}
+                <div class="booking-item">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <i class="fas fa-tag" style="color:var(--color-primary); margin-right:5px;"></i>
+                            <strong>{{ booking.experiment.name }}</strong><br>
+                            <small style="color:var(--color-text-subtle);">Slot: {{ booking.start_time.strftime('%Y-%m-%d') }} {{ booking.start_time.strftime('%H:%M') }} &nbsp; | &nbsp; Duration: {{ ((booking.end_time - booking.start_time).total_seconds() // 60) }} min</small>
+                            <div class="booking-status-text status-{{ booking.status.lower() }}"><strong>Status:</strong> {{ booking.status }}</div>
+                            <div style="margin-top:6px; font-size:0.9em;">Session Key: <code>{{ booking.session_key }}</code></div>
+                        </div>
+                        <div class="booking-actions" style="text-align:right;">
+                            {% if booking.status == 'ACTIVE' %}
+                                <a href="{{ url_for('start_booking', booking_id=booking.id) }}" class="book-btn primary" style="display:inline-block; width:auto; margin:0; font-size:0.95em;">Start <i class="fas fa-play"></i></a>
+                            {% elif booking.status == 'IN_PROGRESS' %}
+                                <a href="{{ url_for('experiment', key=booking.session_key) }}" class="book-btn" style="display:inline-block; width:auto; margin:0; background:#007bff !important; color: white !important; box-shadow: none; font-size:0.95em;">Open <i class="fas fa-external-link-alt"></i></a>
+                            {% elif booking.status == 'UPCOMING' %}
+                                <a href="{{ url_for('cancel_booking', booking_id=booking.id) }}" style="background:#dc3545; color:white; border:none; border-radius:6px; cursor:pointer; padding:8px 15px; font-size:0.9em; font-weight:700;">Cancel</a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p>You have no scheduled bookings.</p>
+            {% endif %}
+        </div>
     </div>
+    {% endif %}
 
     <div class="container">
         
@@ -464,51 +491,29 @@
         <h2 id="experiments"><i class="fas fa-flask"></i> Available Experiments</h2>
         <div class="experiments-grid">
             
+            {% for experiment in experiments %}
             <div class="experiment-card">
                 <div class="card-top">
                     <div class="exp-title">
-                        <h3>1. DC Motor Speed Control</h3>
+                        <h3>{{ loop.index }}. {{ experiment.name }}</h3>
                     </div>
-                    <p class="sop">SOP Summary: Control DC motor speed using PWM with real-time RPM feedback.
-Ensure stable, precise, and reliable motor performance. .</p>
+                    <p class="sop">SOP Summary: {{ experiment.description }}</p>
                     <div class="price-structure">
-                        (Max 60 min session | Recommended for Embedded C fundamentals)
+                        (Max {{ experiment.max_duration }} min session)
                     </div>
                 </div>
-                <button class="book-btn" onclick="openBookingModal('DC Motor', 'DC Motor Speed Control')">
-                    Book Your Slot Now <i class="fas fa-calendar-check"></i>
-                </button>
+                {% if current_user.is_authenticated %}
+                    <a href="{{ url_for('book_experiment', exp_id=experiment.id) }}" class="book-btn">
+                        Book Your Slot Now <i class="fas fa-calendar-check"></i>
+                    </a>
+                {% else %}
+                    <button class="book-btn" onclick="alert('Please login to book a slot'); window.location.href='{{ url_for('login') }}'">
+                        Book Your Slot Now <i class="fas fa-calendar-check"></i>
+                    </button>
+                {% endif %}
             </div>
+            {% endfor %}
 
-            <div class="experiment-card">
-                <div class="card-top">
-                    <div class="exp-title">
-                        <h3>2. Temperature & Humidity Monitoring</h3>
-                    </div>
-                    <p class="sop">SOP Summary: Interface with a DHT sensor, read environmental data, and log / visualize the readings on a real-time data chart.</p>
-                    <div class="price-structure">
-                        (Max 60 min session | Focus on sensor interfacing and data handling)
-                    </div>
-                </div>
-                <button class="book-btn" onclick="openBookingModal('TEMP_HUMIDITY', 'Temperature & Humidity Monitoring')">
-                    Book Your Slot Now <i class="fas fa-calendar-check"></i>
-                </button>
-            </div>
-
-            <div class="experiment-card">
-                <div class="card-top">
-                    <div class="exp-title">
-                        <h3>3. Stepper Motor Control</h3>
-                    </div>
-                    <p class="sop">SOP Summary: Implement precise sequence control logic to manage angular rotation, speed, and direction of a stepper motor.</p>
-                    <div class="price-structure">
-                        (Max 60 min session | Test advanced timing and control algorithms)
-                    </div>
-                </div>
-                <button class="book-btn" onclick="openBookingModal('STEPPER_MOTOR', 'Stepper Motor Control')">
-                    Book Your Slot Now <i class="fas fa-calendar-check"></i>
-                </button>
-            </div>
         </div>
         
         <div class="info-section" style="margin-top: 80px;">
@@ -528,539 +533,25 @@ Ensure stable, precise, and reliable motor performance. .</p>
 
     </div>
 
-    <div id="bookingModal" class="modal">
-      <div class="modal-content">
-        <span class="close-btn" onclick="closeModal()">&times;</span>
-        <h3>Book Your Session Slot</h3>
-        <p id="modalExpTitle" style="color:var(--color-primary); font-weight:800;"></p>
-        <form id="bookingForm">
-            <input type="hidden" id="expIdInput" name="experimentId">
-
-            <label for="userName">Full Name</label>
-            <input type="text" id="userName" name="userName" required>
-
-            <label for="userEmail">Email ID (for notification)</label>
-            <input type="email" id="userEmail" name="userEmail" required>
-            
-            <label for="slotDate">Session Date</label>
-            <input type="date" id="slotDate" name="slotDate" required>
-            
-            <label for="slotTime">Session Start Time</label>
-            <input type="time" id="slotTime" name="slotTime" required>
-
-            <label for="duration">Duration (Max 60 minutes)</label>
-            <select id="duration" name="duration" required>
-                <option value="1">1 minute</option>
-                <option value="2" selected>2 minutes</option>
-                <option value="5">5 minutes</option>
-                <option value="10">10 minutes</option>
-                <option value="30">30 minutes</option>
-                <option value="60">60 minutes</option>
-            </select>
-            
-            <button type="submit" class="book-btn primary">
-                Confirm Booking <i class="fas fa-check-circle"></i>
-            </button>
-        </form>
-      </div>
-    </div>
-
-    <div id="authModal" class="modal">
-      <div class="modal-content">
-        <span class="close-btn" onclick="closeAuthModal()">&times;</span>
-        <h3>User Login / Signup</h3>
-
-        <label>Email</label>
-        <input type="email" id="authEmail" placeholder="you@example.com">
-
-        <label>Password</label>
-        <input type="password" id="authPassword" placeholder="Choose a password">
-
-        <button onclick="loginOrSignup()" class="book-btn" style="width:100%; margin-top:20px;">
-            Continue <i class="fas fa-user-circle"></i>
-        </button>
-      </div>
-    </div>
-
     <script>
-        /******************************
-         * Configuration
-         ******************************/
-        const PI_EXPERIMENT_URL = "/experiment"; // Local experiment base URL
-        const STATUS = {
-            UPCOMING: 'UPCOMING',
-            ACTIVE: 'ACTIVE',         // time window has arrived (user can start)
-            IN_PROGRESS: 'IN_PROGRESS',
-            COMPLETED: 'COMPLETED',
-            EXPIRED: 'EXPIRED',
-            CANCELLED: 'CANCELLED'
-        };
-
-        /******************************
-         * Utility: Random 8-char key
-         ******************************/
-        function generateSessionKey() {
-            const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            let out = "";
-            for (let i = 0; i < 8; i++) {
-                out += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
-            return out;
-        }
-
-        /******************************
-         * Auth modal functions (localStorage)
-         ******************************/
-        function openAuthModal() {
-            document.getElementById("authModal").style.display = "block";
-        }
-        function closeAuthModal() {
-            document.getElementById("authModal").style.display = "none";
-        }
-
-        function loginOrSignup() {
-            const email = document.getElementById("authEmail").value.trim().toLowerCase();
-            const pass  = document.getElementById("authPassword").value;
-
-            if (!email || !pass) {
-                alert("Please enter email and password.");
-                return;
-            }
-
-            let users = JSON.parse(localStorage.getItem("users") || "{}");
-
-            if (!users[email]) {
-                // Signup
-                users[email] = { password: pass };
-                localStorage.setItem("users", JSON.stringify(users));
-                alert("Account created and logged in.");
-            } else {
-                // Login
-                if (users[email].password !== pass) {
-                    alert("Incorrect password.");
-                    return;
-                }
-                alert("Logged in successfully.");
-            }
-
-            localStorage.setItem("loggedUser", email);
-            closeAuthModal();
-            updateAuthUI();
-        }
-
-        function logoutUser() {
-            localStorage.removeItem("loggedUser");
-            updateAuthUI();
-        }
-
-        function updateAuthUI() {
-            const user = localStorage.getItem("loggedUser");
-            document.getElementById("loginBtn").style.display  = user ? "none" : "inline-block";
-            document.getElementById("logoutBtn").style.display = user ? "inline-block" : "none";
-            loadMyBookings();
-        }
-
-        /******************************
-         * Booking modal & logic
-         ******************************/
-        const modal = document.getElementById("bookingModal");
-        const expIdInput = document.getElementById("expIdInput");
-        const modalExpTitle = document.getElementById("modalExpTitle");
-        const bookingForm = document.getElementById("bookingForm");
-
-        function openBookingModal(experimentId, title) {
-            const user = localStorage.getItem("loggedUser");
-            if (!user) {
-                alert("Please login to book a slot.");
-                openAuthModal();
-                return;
-            }
-
-            expIdInput.value = experimentId;
-            modalExpTitle.textContent = title;
-            // Pre-fill email field when modal opens
-            const emailInput = document.getElementById("userEmail");
-            if (emailInput) emailInput.value = user;
-            
-            modal.style.display = "block";
-        }
-
-        function closeModal() {
-            modal.style.display = "none";
-        }
-
-        // Close on outside click (for both modals)
-        window.onclick = function(event) {
-            if (event.target === modal) closeModal();
-            if (event.target === document.getElementById("authModal")) closeAuthModal();
-        };
-
-        // Helper: parse date + time (YYYY-MM-DD & HH:MM) into timestamp (ms)
-        function parseDateTime(dateStr, timeStr) {
-            if (!dateStr || !timeStr) return null;
-            // timeStr is 'HH:MM' 24-hour format
-            const [hh, mm] = timeStr.split(':').map(n => parseInt(n, 10));
-            const d = new Date(dateStr);
-            d.setHours(hh, mm, 0, 0);
-            return d.getTime();
-        }
-
-        // Save booking on submit — DO NOT auto-open experiment now; scheduling enforced later
-        bookingForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-
-            const user = localStorage.getItem("loggedUser");
-            if (!user) {
-                alert("Login required to book.");
-                openAuthModal();
-                return;
-            }
-
-            const experimentId = document.getElementById("expIdInput").value;
-            const expTitle = modalExpTitle.textContent;
-            const name = document.getElementById("userName").value.trim();
-            const email = document.getElementById("userEmail").value.trim();
-            const slotDate = document.getElementById("slotDate").value;
-            const slotTime = document.getElementById("slotTime").value;
-            const duration = parseInt(document.getElementById("duration").value);
-
-            if (!name || !email || !slotDate || !slotTime || !duration) {
-                alert("Please fill all fields.");
-                return;
-            }
-
-            // Validate that the chosen date/time is not in the past (small tolerance allowed)
-            const slotStartMs = parseDateTime(slotDate, slotTime);
-            if (slotStartMs === null) { alert("Invalid date/time"); return; }
-            const now = Date.now();
-            if (slotStartMs + 60*1000 < now) { 
-                if (!confirm("You selected a past time. Do you still want to book?")) {
-                    return;
-                }
-            }
-
-            // Create booking object & session key
-            const key = generateSessionKey();
-            const booking = {
-                id: key,
-                userName: name,
-                userEmail: email,
-                experimentId: experimentId,
-                title: expTitle,
-                date: slotDate,          
-                time: slotTime,          
-                startMs: slotStartMs,    
-                duration: duration,      
-                endMs: slotStartMs + duration * 60 * 1000,
-                createdAt: new Date().toISOString(),
-                status: STATUS.UPCOMING,
-                startedAt: null,         
-                completedAt: null
-            };
-
-            let bookings = JSON.parse(localStorage.getItem("bookings") || "{}");
-            if (!bookings[user]) bookings[user] = [];
-            bookings[user].push(booking);
-            localStorage.setItem("bookings", JSON.stringify(bookings));
-
-            alert(`Booking saved ✅\nYour session key: ${booking.id}\nStart at: ${booking.date} ${booking.time}`);
-            closeModal();
+        // Initialize UI on load
+        document.addEventListener('DOMContentLoaded', function() {
             updateAuthUI();
         });
 
-        /******************************
-         * My Booked Slots: load & actions
-         ******************************/
-        function loadMyBookings() {
-            const user = localStorage.getItem("loggedUser");
-            const container = document.getElementById("myBookings");
-            const listDiv = document.getElementById("bookingsList");
-
-            if (!user) {
-                container.style.display = "none";
-                return;
-            }
-
-            let bookings = JSON.parse(localStorage.getItem("bookings") || "{}");
-            let list = bookings[user] || [];
-
-            // First update statuses for each booking
-            const now = Date.now();
-            list = list.map(b => {
-                // If already cancelled/completed, keep as is
-                if (b.status === STATUS.CANCELLED || b.status === STATUS.COMPLETED) return b;
-
-                // If started:
-                if (b.startedAt) {
-                    const startedAt = b.startedAt;
-                    const endAfterStart = startedAt + b.duration * 60 * 1000;
-                    if (now > endAfterStart) {
-                        b.status = STATUS.COMPLETED;
-                        b.completedAt = endAfterStart;
-                    } else {
-                        b.status = STATUS.IN_PROGRESS;
-                    }
-                    return b;
-                }
-
-                // Not started yet:
-                if (now < b.startMs) {
-                    b.status = STATUS.UPCOMING;
-                } else if (now >= b.startMs && now <= b.endMs) {
-                    b.status = STATUS.ACTIVE; // user can start now
-                } else if (now > b.endMs) {
-                    // window passed and user never started -> expired
-                    b.status = STATUS.EXPIRED;
-                }
-                return b;
-            });
-
-            // Save back statuses
-            bookings[user] = list;
-            localStorage.setItem("bookings", JSON.stringify(bookings));
-
-            if (list.length === 0) {
-                container.style.display = "none";
-                listDiv.innerHTML = "<p>You have no scheduled bookings.</p>";
-                return;
-            }
-
-            container.style.display = "block";
-            let html = "";
-
-            list.forEach((b, idx) => {
-                // show friendly start availability text
-                let statusLabel = b.status;
-                let statusText = "";
-                let startButtonHtml = "";
-                let deleteButtonHtml = "";
-                let statusClass = "";
-
-                const startTimeFormatted = formatDateTimeDisplay(b.startMs);
-                const endTimeFormatted = formatDateTimeDisplay(b.endMs);
-
-                if (b.status === STATUS.UPCOMING) {
-                    statusText = `UPCOMING — available at ${formatTimeOnly(b.startMs)} on ${formatDateOnly(b.startMs)}`;
-                    statusClass = "status-upcoming";
-                    // allow delete only for upcoming
-                    deleteButtonHtml = `<button onclick="deleteBooking('${user}', ${idx})" style="background:#dc3545; color:white; border:none; border-radius:6px; cursor:pointer;">Cancel</button>`;
-                } else if (b.status === STATUS.ACTIVE) {
-                    statusText = `START WINDOW — ${formatTimeOnly(b.startMs)} → ${formatTimeOnly(b.endMs)}`;
-                    statusClass = "status-active";
-                    // start button enabled
-                    startButtonHtml = `<button onclick="startBooking('${user}', ${idx})" class="book-btn primary" style="display:inline-block; width:auto; margin:0; font-size:0.95em;">Start <i class="fas fa-play"></i></button>`;
-                } else if (b.status === STATUS.IN_PROGRESS) {
-                    // show remaining time
-                    const remainingMs = Math.max(0, (b.startedAt + b.duration * 60 * 1000) - Date.now());
-                    statusText = `IN PROGRESS — ends at ${formatTimeOnly(b.startedAt + b.duration*60*1000)} (Remaining: <span class="live-timer" data-session-id="${b.id}">${msToTimeShort(remainingMs)}</span>)`;
-                    statusClass = "status-inprogress";
-                    // no delete, but allow showing "In progress" and maybe a "Bring to experiment" button
-                    startButtonHtml = `<button onclick="focusExperiment('${b.id}')" class="book-btn" style="display:inline-block; width:auto; margin:0; background:#007bff !important; color: white !important; box-shadow: none; font-size:0.95em;">Open <i class="fas fa-external-link-alt"></i></button>`;
-                } else if (b.status === STATUS.COMPLETED) {
-                    statusText = `COMPLETED — ${formatDateOnly(b.completedAt || b.endMs)} ${formatTimeOnly(b.completedAt || b.endMs)}`;
-                    statusClass = "status-completed";
-                } else if (b.status === STATUS.EXPIRED) {
-                    statusText = `EXPIRED — session window passed (was ${startTimeFormatted} → ${endTimeFormatted})`;
-                    statusClass = "status-expired";
-                } else if (b.status === STATUS.CANCELLED) {
-                    statusText = `CANCELLED`;
-                    statusClass = "status-cancelled";
-                }
-
-                html += `
-                    <div class="booking-item">
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <div>
-                                <i class="fas fa-tag" style="color:var(--color-primary); margin-right:5px;"></i>
-                                <strong>${b.title}</strong><br>
-                                <small style="color:var(--color-text-subtle);">Slot: ${formatDateOnly(b.startMs)} ${formatTimeOnly(b.startMs)} &nbsp; | &nbsp; Duration: ${b.duration} min</small>
-                                <div class="booking-status-text ${statusClass}"><strong>Status:</strong> ${statusText}</div>
-                                <div style="margin-top:6px; font-size:0.9em;">Session Key: <code>${b.id}</code></div>
-                            </div>
-                            <div class="booking-actions" style="text-align:right;">
-                                ${startButtonHtml}
-                                ${deleteButtonHtml}
-                            </div>
-                        </div>
-                    </div>
-                `;
-            });
-
-            listDiv.innerHTML = html;
-        }
-
-        // Delete only allowed for UPCOMING
-        function deleteBooking(user, index) {
-            let bookings = JSON.parse(localStorage.getItem("bookings") || "{}");
-            const b = (bookings[user] || [])[index];
-            if (!b) { alert("Booking not found."); return; }
-            if (b.status !== STATUS.UPCOMING) {
-                alert("Only upcoming bookings can be deleted.");
-                return;
-            }
-            if (!confirm("Delete this booking?")) return;
-            bookings[user].splice(index, 1);
-            localStorage.setItem("bookings", JSON.stringify(bookings));
-            loadMyBookings();
-        }
-
-        // When user clicks Start: open Pi URL in new tab and set startedAt; auto-close after remaining time
-        function startBooking(user, index) {
-            let bookings = JSON.parse(localStorage.getItem("bookings") || "{}");
-            const b = (bookings[user] || [])[index];
-            if (!b) { alert("Booking not found."); return; }
-
-            const now = Date.now();
-            if (!(now >= b.startMs && now <= b.endMs)) {
-                alert(`Session not available now. Allowed window: ${formatTimeOnly(b.startMs)} → ${formatTimeOnly(b.endMs)}`);
-                loadMyBookings();
-                return;
-            }
-
-            // mark startedAt if not already
-            if (!b.startedAt) {
-                b.startedAt = now;
-            }
-            b.status = STATUS.IN_PROGRESS;
-            bookings[user][index] = b;
-            localStorage.setItem("bookings", JSON.stringify(bookings));
-
-            // Store session info for shared timer
-            const sessionEndTime = b.startedAt + b.duration * 60 * 1000;
-            localStorage.setItem('sessionEndTime_' + b.id, sessionEndTime);
-            localStorage.setItem('sessionStatus_' + b.id, 'IN_PROGRESS');
-
-            loadMyBookings();
-
-            // Add session to active sessions on server
-            fetch('/add_session', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_key: b.id, duration: b.duration })
-            });
-
-            // open experiment page in new tab with key & duration
-            const url = `${PI_EXPERIMENT_URL}?key=${b.id}&duration=${b.duration}`;
-            const win = window.open(url, '_blank', 'noopener');
-            if (!win) alert("Popup blocked. Please allow popups for this site to open experiment in a new tab.");
-        }
-
-        // Helper to open experiment for an IN_PROGRESS booking (navigate)
-        function focusExperiment(sessionKey) {
-            // Check if session is still active
-            const sessionStatus = localStorage.getItem('sessionStatus_' + sessionKey);
-            if (sessionStatus === 'COMPLETED') {
-                alert("Session has ended. Please book a new slot.");
-                window.location.href = '/';
-                return;
-            }
-
-            // Simply open the URL again (duration param included)
-            const allBookings = JSON.parse(localStorage.getItem("bookings") || "{}");
-            const user = localStorage.getItem("loggedUser");
-            const list = allBookings[user] || [];
-            const b = list.find(x => x.id === sessionKey);
-            if (!b) { alert("Booking not found."); return; }
-
-            const url = `${PI_EXPERIMENT_URL}?key=${b.id}&duration=${b.duration}`;
-            window.location.href = url;
-        }
-
-        // Live timer updates for active sessions
-        function updateLiveTimers() {
-            const user = localStorage.getItem("loggedUser");
-            if (!user) return;
-
-            let bookings = JSON.parse(localStorage.getItem("bookings") || "{}");
-            let list = bookings[user] || [];
-
-            list.forEach(b => {
-                if (b.status === STATUS.IN_PROGRESS) {
-                    const sessionEndTime = localStorage.getItem('sessionEndTime_' + b.id);
-                    if (sessionEndTime) {
-                        const remainingMs = Math.max(0, parseInt(sessionEndTime) - Date.now());
-                        const timerElement = document.querySelector(`[data-session-id="${b.id}"]`);
-                        if (timerElement) {
-                            timerElement.textContent = msToTimeShort(remainingMs);
-                        }
-                    }
-                }
-            });
-        }
-
-        // Update live timers every second for active sessions
-        setInterval(updateLiveTimers, 1000);
-
-        // Formatting helpers
-        function pad(n){ return n<10?('0'+n):n; }
-        function formatTimeOnly(msOrTs) {
-            const d = new Date(msOrTs);
-            return pad(d.getHours()) + ':' + pad(d.getMinutes());
-        }
-        function formatDateOnly(msOrTs) {
-            const d = new Date(msOrTs);
-            return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
-        }
-        function formatDateTimeDisplay(msOrTs) {
-            const d = new Date(msOrTs);
-            return formatDateOnly(msOrTs) + ' ' + formatTimeOnly(msOrTs);
-        }
-        function msToTimeShort(ms) {
-            if (ms <= 0) return '0m 0s';
-            const mins = Math.floor(ms / 60000);
-            const secs = Math.floor((ms % 60000) / 1000);
-            if (mins > 0) return `${mins}m ${secs}s`;
-            return `${secs}s`;
-        }
-
-        // Periodic status updater (runs every 15 seconds)
-        setInterval(() => {
-            const user = localStorage.getItem("loggedUser");
-            if (!user) return;
-            let bookings = JSON.parse(localStorage.getItem("bookings") || "{}");
-            let list = bookings[user] || [];
-            let changed = false;
-            const now = Date.now();
-
-            list = list.map(b => {
-                const prev = b.status;
-                // if cancelled/completed keep
-                if (b.status === STATUS.CANCELLED || b.status === STATUS.COMPLETED) return b;
-
-                if (b.startedAt) {
-                    const endAfterStart = b.startedAt + b.duration * 60 * 1000;
-                    if (now > endAfterStart) {
-                        b.status = STATUS.COMPLETED;
-                        b.completedAt = endAfterStart;
-                    } else {
-                        b.status = STATUS.IN_PROGRESS;
-                    }
-                } else {
-                    if (now < b.startMs) {
-                        b.status = STATUS.UPCOMING;
-                    } else if (now >= b.startMs && now <= b.endMs) {
-                        b.status = STATUS.ACTIVE;
-                    } else if (now > b.endMs) {
-                        b.status = STATUS.EXPIRED;
-                    }
-                }
-
-                if (b.status !== prev) changed = true;
-                return b;
-            });
-
-            if (changed) {
-                bookings[user] = list;
-                localStorage.setItem("bookings", JSON.stringify(bookings));
-                loadMyBookings();
+        function updateAuthUI() {
+            const user = "{{ current_user.is_authenticated }}";
+            const loginBtn = document.getElementById("loginBtn");
+            const logoutBtn = document.getElementById("logoutBtn");
+            
+            if (user === "True") {
+                if (loginBtn) loginBtn.style.display = "none";
+                if (logoutBtn) logoutBtn.style.display = "inline-block";
             } else {
-                // still refresh UI (e.g., remaining time) each 15s
-                loadMyBookings();
+                if (loginBtn) loginBtn.style.display = "inline-block";
+                if (logoutBtn) logoutBtn.style.display = "none";
             }
-        }, 15000);
-
-        // Initialize UI on load
-        updateAuthUI();
+        }
     </script>
 </body>
 </html>
