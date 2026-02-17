@@ -299,6 +299,16 @@
                             {% endfor %}
                         </select>
                     </div>
+
+                    <div class="form-group">
+                        <label for="device_id">Select Lab Pi</label>
+                        <select id="device_id" name="device_id" required>
+                            <option value="">Auto-assign (Recommended)</option>
+                            {% for device in available_devices %}
+                                <option value="{{ device.id }}">{{ device.device_name }} - {{ device.location }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                 </div>
 
                 <div class="booking-summary">

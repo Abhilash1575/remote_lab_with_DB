@@ -42,6 +42,9 @@ eventlet.monkey_patch()
 # Import database models
 from models import db, bcrypt, User, Experiment, Booking, Session, Device, OTAUpdate, PasswordResetToken, DeviceMetric, SystemLog
 
+# Import configuration
+from config import config
+
 # Import UPS monitoring
 try:
     import dfrobot_ups
@@ -51,6 +54,12 @@ except ImportError:
 
 # System monitoring
 import psutil
+
+# Lab Pi communication
+import requests
+import threading
+import time
+from datetime import datetime
 
 # ---------- CONFIG ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1221,6 +1230,13 @@ def book_experiment(exp_id):
         flash('Experiment not available', 'danger')
         return redirect(url_for('index'))
     
+    # Get available Lab Pis for this experiment
+    available_devices = Device.query.filter_by(status='ONLINE', maintenance_mode=False, current_booking_id=None).all()
+    experiment_devices = []
+    for device in available_devices:
+        if device.get_experiment_capabilities() and exp_id in device.get_experiment_capabilities():
+            experiment_devices.append(device)
+    
     if request.method == 'POST':
         print("DEBUG: Booking form submitted")
         print(f"DEBUG: Form data: {request.form}")
@@ -1228,6 +1244,7 @@ def book_experiment(exp_id):
         slot_date = request.form['slotDate']
         slot_time = request.form['slotTime']
         duration = int(request.form['duration'])
+        device_id = request.form.get('device_id', type=int)
         
         if duration > experiment.max_duration:
             flash(f'Maximum duration for this experiment is {experiment.max_duration} minutes', 'danger')
@@ -1269,6 +1286,24 @@ def book_experiment(exp_id):
         db.session.add(booking)
         db.session.commit()
         
+        # Assign a Lab Pi to the booking if selected
+        if device_id:
+            device = Device.query.get(device_id)
+            if device and device.is_available():
+                device.current_booking_id = booking.id
+                device.status = 'BUSY'
+                db.session.commit()
+                
+                log_entry = SystemLog(
+                    level='INFO',
+                    category='EXPERIMENT',
+                    message=f"Lab Pi '{device.device_name}' assigned to booking #{booking.id}",
+                    device_id=device.id,
+                    user_id=current_user.id
+                )
+                db.session.add(log_entry)
+                db.session.commit()
+        
         print(f"DEBUG: Booking created successfully: {booking}")
         print(f"DEBUG: Session key: {session_key}")
         
@@ -1281,6 +1316,7 @@ def book_experiment(exp_id):
             <p><strong>Time:</strong> {slot_time}</p>
             <p><strong>Duration:</strong> {duration} minutes</p>
             <p><strong>Session Key:</strong> {session_key}</p>
+            {'<p><strong>Lab Pi:</strong> ' + (Device.query.get(device_id).device_name if device_id else 'Auto-assigned') + '</p>' if device_id else '<p><strong>Lab Pi:</strong> Auto-assigned</p>'}
             <p>You will receive a reminder email 30 minutes before your session starts.</p>
         '''
         send_email(current_user.email, subject, template)
@@ -1288,7 +1324,7 @@ def book_experiment(exp_id):
         flash('Booking confirmed! Check your email for details.', 'success')
         return redirect(url_for('my_bookings'))
     
-    return render_template('book.html', experiment=experiment)
+    return render_template('book.html', experiment=experiment, available_devices=experiment_devices)
 
 @app.route('/my_bookings')
 @login_required
@@ -1633,6 +1669,352 @@ def send_sensor_data_to_clients(data):
     except Exception as e:
         print("[ERROR] Failed to emit sensor_data:", e)
 
+# ---------- LAB PI API ENDPOINTS ----------
+@app.route('/api/lab/register', methods=['POST'])
+def register_lab_pi():
+    """Register a Lab Pi with Admin Pi"""
+    try:
+        data = request.get_json()
+        
+        # Validate API key
+        api_key = request.headers.get('X-API-Key')
+        if api_key != config.get('security.api_key'):
+            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
+        
+        mac_address = data.get('mac_address')
+        if not mac_address:
+            return jsonify({'success': False, 'message': 'MAC address required'}), 400
+        
+        # Check if device already registered
+        device = Device.query.filter_by(mac_address=mac_address).first()
+        if device:
+            # Update existing device
+            device.ip_address = data.get('ip_address', device.ip_address)
+            device.device_name = data.get('device_name', device.device_name)
+            device.device_type = data.get('device_type', device.device_type)
+            device.location = data.get('location', device.location)
+            device.experiment_capabilities = json.dumps(data.get('experiment_capabilities', []))
+            device.firmware_version = data.get('firmware_version', device.firmware_version)
+            device.hardware_version = data.get('hardware_version', device.hardware_version)
+            device.status = 'ONLINE'
+            device.last_seen = datetime.utcnow()
+            device.last_heartbeat = datetime.utcnow()
+        else:
+            # Create new device
+            device = Device(
+                mac_address=mac_address,
+                ip_address=data.get('ip_address'),
+                device_name=data.get('device_name', 'Unknown Lab Pi'),
+                device_type=data.get('device_type', 'raspberry-pi'),
+                location=data.get('location', 'Unknown'),
+                experiment_capabilities=json.dumps(data.get('experiment_capabilities', [])),
+                firmware_version=data.get('firmware_version', '1.0.0'),
+                hardware_version=data.get('hardware_version', 'RPi4'),
+                status='ONLINE',
+                last_seen=datetime.utcnow(),
+                last_heartbeat=datetime.utcnow()
+            )
+            db.session.add(device)
+        
+        db.session.commit()
+        
+        log_entry = SystemLog(
+            level='INFO',
+            category='SYSTEM',
+            message=f"Lab Pi registered/updated: {device.device_name} ({device.ip_address})",
+            device_id=device.id
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'device_id': device.id,
+            'message': 'Lab Pi registered successfully'
+        })
+    except Exception as e:
+        print(f"Error registering Lab Pi: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/lab/heartbeat', methods=['POST'])
+def lab_heartbeat():
+    """Handle Lab Pi heartbeat"""
+    try:
+        data = request.get_json()
+        
+        # Validate API key
+        api_key = request.headers.get('X-API-Key')
+        if api_key != config.get('security.api_key'):
+            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
+        
+        mac_address = data.get('mac_address')
+        if not mac_address:
+            return jsonify({'success': False, 'message': 'MAC address required'}), 400
+        
+        # Find device
+        device = Device.query.filter_by(mac_address=mac_address).first()
+        if not device:
+            # Auto-register device if not found
+            return register_lab_pi()
+        
+        # Update device information
+        device.ip_address = data.get('ip_address', device.ip_address)
+        device.status = data.get('status', 'ONLINE')
+        device.last_seen = datetime.utcnow()
+        device.last_heartbeat = datetime.utcnow()
+        
+        # Update system metrics if provided
+        if 'cpu_usage' in data:
+            device.cpu_usage = data.get('cpu_usage')
+        if 'ram_usage' in data:
+            device.ram_usage = data.get('ram_usage')
+        if 'temperature' in data:
+            device.temperature = data.get('temperature')
+        
+        # Create metric entry
+        metric = DeviceMetric(
+            device_id=device.id,
+            cpu_usage=device.cpu_usage,
+            ram_usage=device.ram_usage,
+            temperature=device.temperature
+        )
+        db.session.add(metric)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Heartbeat received'})
+    except Exception as e:
+        print(f"Error handling heartbeat: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/telemetry', methods=['POST'])
+def receive_telemetry():
+    """Receive telemetry data from Lab Pi"""
+    try:
+        data = request.get_json()
+        
+        # Validate API key
+        api_key = request.headers.get('X-API-Key')
+        if api_key != config.get('security.api_key'):
+            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
+        
+        mac_address = data.get('mac_address')
+        if not mac_address:
+            return jsonify({'success': False, 'message': 'MAC address required'}), 400
+        
+        # Find device
+        device = Device.query.filter_by(mac_address=mac_address).first()
+        if not device:
+            return jsonify({'success': False, 'message': 'Device not found'}), 404
+        
+        # TODO: Handle telemetry data (store in database, forward to WebSocket, etc.)
+        sensor_data = data.get('sensor_data', {})
+        timestamp = data.get('timestamp', datetime.utcnow().isoformat())
+        
+        # Forward telemetry to connected clients
+        socketio.emit('sensor_data', {
+            'device_id': device.id,
+            'device_name': device.device_name,
+            'timestamp': timestamp,
+            'data': sensor_data
+        })
+        
+        return jsonify({'success': True, 'message': 'Telemetry received'})
+    except Exception as e:
+        print(f"Error receiving telemetry: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/lab/send_command', methods=['POST'])
+def send_command_to_lab():
+    """Send a command to a specific Lab Pi"""
+    try:
+        data = request.get_json()
+        
+        # Validate API key
+        api_key = request.headers.get('X-API-Key')
+        if api_key != config.get('security.api_key'):
+            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
+        
+        device_id = data.get('device_id')
+        command = data.get('command')
+        
+        if not device_id or not command:
+            return jsonify({'success': False, 'message': 'Device ID and command required'}), 400
+        
+        # Find device
+        device = Device.query.get(device_id)
+        if not device:
+            return jsonify({'success': False, 'message': 'Device not found'}), 404
+        
+        # Send command to Lab Pi
+        lab_url = f"http://{device.ip_address}:5001/api/experiment/{command}"
+        response = requests.post(lab_url, json=data.get('params', {}), headers={'X-API-Key': config.get('security.api_key')})
+        
+        if response.status_code == 200:
+            return jsonify({'success': True, 'message': 'Command sent successfully', 'data': response.json()})
+        else:
+            return jsonify({'success': False, 'message': f'Failed to send command: {response.text}'}), response.status_code
+    except Exception as e:
+        print(f"Error sending command: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/lab/get_available', methods=['GET'])
+def get_available_labs():
+    """Get all available Lab Pis for a specific experiment"""
+    try:
+        experiment_id = request.args.get('experiment_id', type=int)
+        
+        # Get all online and available devices
+        devices = Device.query.filter_by(status='ONLINE', maintenance_mode=False, current_booking_id=None).all()
+        
+        if experiment_id:
+            # Filter devices that support the specified experiment
+            available_devices = []
+            for device in devices:
+                if device.get_experiment_capabilities() and experiment_id in device.get_experiment_capabilities():
+                    available_devices.append(device)
+        else:
+            available_devices = devices
+        
+        return jsonify({
+            'success': True,
+            'devices': [{
+                'id': device.id,
+                'name': device.device_name,
+                'type': device.device_type,
+                'ip_address': device.ip_address,
+                'location': device.location,
+                'capabilities': device.get_experiment_capabilities()
+            } for device in available_devices]
+        })
+    except Exception as e:
+        print(f"Error getting available labs: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/lab/assign', methods=['POST'])
+def assign_lab_to_booking():
+    """Assign a Lab Pi to a booking"""
+    try:
+        data = request.get_json()
+        
+        # Validate API key
+        api_key = request.headers.get('X-API-Key')
+        if api_key != config.get('security.api_key'):
+            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
+        
+        booking_id = data.get('booking_id')
+        device_id = data.get('device_id')
+        
+        if not booking_id or not device_id:
+            return jsonify({'success': False, 'message': 'Booking ID and Device ID required'}), 400
+        
+        # Find booking and device
+        booking = Booking.query.get(booking_id)
+        device = Device.query.get(device_id)
+        
+        if not booking or not device:
+            return jsonify({'success': False, 'message': 'Booking or device not found'}), 404
+        
+        # Check if device is available
+        if device.current_booking_id is not None or device.status != 'ONLINE' or device.maintenance_mode:
+            return jsonify({'success': False, 'message': 'Device is not available'}), 400
+        
+        # Assign device to booking
+        device.current_booking_id = booking_id
+        device.status = 'BUSY'
+        db.session.commit()
+        
+        log_entry = SystemLog(
+            level='INFO',
+            category='EXPERIMENT',
+            message=f"Lab Pi '{device.device_name}' assigned to booking #{booking_id}",
+            device_id=device.id
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Lab Pi assigned successfully'})
+    except Exception as e:
+        print(f"Error assigning Lab Pi: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/lab/release', methods=['POST'])
+def release_lab_pi():
+    """Release a Lab Pi from a booking"""
+    try:
+        data = request.get_json()
+        
+        # Validate API key
+        api_key = request.headers.get('X-API-Key')
+        if api_key != config.get('security.api_key'):
+            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
+        
+        booking_id = data.get('booking_id')
+        
+        if not booking_id:
+            return jsonify({'success': False, 'message': 'Booking ID required'}), 400
+        
+        # Find device with this booking
+        device = Device.query.filter_by(current_booking_id=booking_id).first()
+        
+        if not device:
+            return jsonify({'success': False, 'message': 'Device not found for this booking'}), 404
+        
+        # Release the device
+        device.current_booking_id = None
+        device.status = 'ONLINE'
+        db.session.commit()
+        
+        log_entry = SystemLog(
+            level='INFO',
+            category='EXPERIMENT',
+            message=f"Lab Pi '{device.device_name}' released from booking #{booking_id}",
+            device_id=device.id
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Lab Pi released successfully'})
+    except Exception as e:
+        print(f"Error releasing Lab Pi: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+# ---------- DEVICE MONITORING ----------
+def check_device_heartbeats():
+    """Check if any devices have expired heartbeats"""
+    while True:
+        try:
+            with app.app_context():
+                devices = Device.query.all()
+                for device in devices:
+                    if device.is_heartbeat_expired() and device.status != 'OFFLINE':
+                        device.status = 'OFFLINE'
+                        db.session.commit()
+                        log_entry = SystemLog(
+                            level='WARNING',
+                            category='SYSTEM',
+                            message=f"Lab Pi '{device.device_name}' is offline (heartbeat expired)",
+                            device_id=device.id
+                        )
+                        db.session.add(log_entry)
+                        db.session.commit()
+        
+            # Check every 30 seconds
+            time.sleep(30)
+        except Exception as e:
+            print(f"Error checking device heartbeats: {e}")
+            time.sleep(30)
+
+# Start device monitoring thread
+def start_device_monitoring():
+    if not hasattr(app, 'device_monitor_thread'):
+        app.device_monitor_thread = threading.Thread(target=check_device_heartbeats, daemon=True)
+        app.device_monitor_thread.start()
+        print("✅ Device heartbeat monitoring started")
+
+# Run device monitoring when the application starts
+with app.app_context():
+    start_device_monitoring()
+
 # ---------- MAIN ----------
 if __name__ == '__main__':
     import socket
@@ -1651,6 +2033,12 @@ if __name__ == '__main__':
     print("========================================")
     print("Virtual Lab Server Starting...")
     print("========================================")
+
+    # Check if we're in admin mode
+    if config.is_admin_pi():
+        print("✅ Admin Pi mode enabled")
+    else:
+        print("⚠️  Not running in Admin Pi mode")
 
     audio_running = check_port(9000, "Audio server")
     if not audio_running:

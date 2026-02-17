@@ -130,10 +130,18 @@ class Device(db.Model):
     device_name = db.Column(db.String(100), nullable=False)
     device_type = db.Column(db.String(50), nullable=False)
     location = db.Column(db.String(100))
-    status = db.Column(db.String(20), default='ONLINE')  # ONLINE, OFFLINE, MAINTENANCE
+    status = db.Column(db.String(20), default='OFFLINE')  # ONLINE, OFFLINE, MAINTENANCE, BUSY
     last_seen = db.Column(db.DateTime)
+    last_heartbeat = db.Column(db.DateTime)
     firmware_version = db.Column(db.String(20))
     hardware_version = db.Column(db.String(20))
+    
+    # Experiment capabilities
+    experiment_capabilities = db.Column(db.Text)  # JSON string of supported experiment IDs
+    
+    # Current assignment
+    current_booking_id = db.Column(db.Integer, db.ForeignKey('booking.id'))
+    current_session_id = db.Column(db.Integer, db.ForeignKey('session.id'))
     
     # Monitoring fields
     cpu_usage = db.Column(db.Float)  # Percentage
@@ -147,6 +155,47 @@ class Device(db.Model):
     
     def __repr__(self):
         return f'<Device {self.device_name}>'
+    
+    def get_experiment_capabilities(self):
+        """Get list of experiment IDs this device supports"""
+        if self.experiment_capabilities:
+            try:
+                import json
+                return json.loads(self.experiment_capabilities)
+            except:
+                pass
+        return []
+    
+    def set_experiment_capabilities(self, capabilities):
+        """Set list of experiment IDs this device supports"""
+        import json
+        self.experiment_capabilities = json.dumps(capabilities)
+    
+    def add_experiment_capability(self, experiment_id):
+        """Add an experiment capability to this device"""
+        capabilities = self.get_experiment_capabilities()
+        if experiment_id not in capabilities:
+            capabilities.append(experiment_id)
+            self.set_experiment_capabilities(capabilities)
+    
+    def remove_experiment_capability(self, experiment_id):
+        """Remove an experiment capability from this device"""
+        capabilities = self.get_experiment_capabilities()
+        if experiment_id in capabilities:
+            capabilities.remove(experiment_id)
+            self.set_experiment_capabilities(capabilities)
+    
+    def is_available(self):
+        """Check if device is available for new experiment"""
+        return self.status == 'ONLINE' and not self.maintenance_mode and self.current_booking_id is None
+    
+    def is_heartbeat_expired(self, timeout=10):
+        """Check if heartbeat has expired (in seconds)"""
+        if not self.last_heartbeat:
+            return True
+        from datetime import datetime
+        delta = datetime.utcnow() - self.last_heartbeat
+        return delta.total_seconds() > timeout
 
 class DeviceMetric(db.Model):
     id = db.Column(db.Integer, primary_key=True)
