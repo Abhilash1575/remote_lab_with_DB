@@ -460,17 +460,31 @@
                                 </span>
                             </td>
                             <td>{{ device.last_seen.strftime('%Y-%m-%d %H:%M') if device.last_seen else '-' }}</td>
-                            <td>{{ device.cpu_usage|round(1) if device.cpu_usage is not none else '-' }}</td>
-                            <td>{{ device.ram_usage|round(1) if device.ram_usage is not none else '-' }}</td>
-                            <td>{{ device.temperature|round(1) if device.temperature is not none else '-' }}</td>
+                            <td>{{ device.cpu_usage|round(1) if device.cpu_usage is not none else '-' }}%</td>
+                            <td>{{ device.ram_usage|round(1) if device.ram_usage is not none else '-' }}%</td>
+                            <td>{{ device.temperature|round(1) if device.temperature is not none else '-' }}°C</td>
                             <td>
                                 {% if device.battery_level %}
-                                    {{ device.battery_level|round(1) }}% ({{ device.battery_voltage|round(2) }}V)
-                                    {% if device.ac_status %}
-                                        <span style="color: green;">🔌</span>
-                                    {% else %}
-                                        <span style="color: orange;">🔋</span>
-                                    {% endif %}
+                                    <div style="display: flex; flex-direction: column; gap: 1px; font-size: 0.9em;">
+                                        <span>
+                                            <strong>{{ device.battery_level|round(1) }}%</strong>
+                                            ({{ device.battery_voltage|round(2) }}V)
+                                        </span>
+                                        <span>
+                                            {% if device.ac_status %}
+                                                <span style="color: green;" title="AC Power Connected">🔌 AC Power</span>
+                                            {% else %}
+                                                <span style="color: orange;" title="Running on Battery">🔋 On Battery</span>
+                                            {% endif %}
+                                        </span>
+                                        <span style="font-size: 0.85em; color: #666;">
+                                            {% if device.charging_status %}
+                                                ⚡ Charging
+                                            {% else %}
+                                                🔋 Discharging
+                                            {% endif %}
+                                        </span>
+                                    </div>
                                 {% else %}
                                     -
                                 {% endif %}

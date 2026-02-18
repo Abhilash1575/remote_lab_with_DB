@@ -42,9 +42,6 @@ eventlet.monkey_patch()
 # Import database models
 from models import db, bcrypt, User, Experiment, Booking, Session, Device, OTAUpdate, PasswordResetToken, DeviceMetric, SystemLog
 
-# Import configuration
-from config import config
-
 # Import UPS monitoring
 try:
     import dfrobot_ups
@@ -54,12 +51,6 @@ except ImportError:
 
 # System monitoring
 import psutil
-
-# Lab Pi communication
-import requests
-import threading
-import time
-from datetime import datetime
 
 # ---------- CONFIG ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -135,6 +126,47 @@ with app.app_context():
 # Global active sessions for authorization
 active_sessions = {}
 
+# Background task for checking expired sessions
+def run_session_monitor():
+    """Background task to monitor and clean up expired sessions"""
+    while True:
+        try:
+            with app.app_context():
+                # Check and cleanup expired sessions
+                check_expired_sessions()
+                
+                # Also check database sessions that might have expired
+                now = datetime.now()
+                expired_db_sessions = Session.query.filter(
+                    Session.status == 'ACTIVE',
+                    Session.end_time < now
+                ).all()
+                
+                for session in expired_db_sessions:
+                    session.status = 'EXPIRED'
+                    # Turn off relay for this session
+                    relay_off()
+                    print(f"DB Session {session.session_key} expired, relay turned off")
+                
+                if expired_db_sessions:
+                    db.session.commit()
+                
+        except Exception as e:
+            print(f"Error in session monitor: {e}")
+        
+        # Check every 5 seconds (reduced for faster session expiry detection)
+        time.sleep(5)
+
+# Start the session monitor in background
+session_monitor_thread = None
+
+def start_session_monitor():
+    global session_monitor_thread
+    if session_monitor_thread is None:
+        session_monitor_thread = threading.Thread(target=run_session_monitor, daemon=True)
+        session_monitor_thread.start()
+        print("Session monitor started")
+
 serial_lock = threading.Lock()
 ser = None
 ser_stop = threading.Event()
@@ -150,7 +182,21 @@ def init_gpio():
     try:
         if gpio_handle is None:
             gpio_handle = lgpio.gpiochip_open(0)
-            lgpio.gpio_claim_output(gpio_handle, RELAY_PIN)
+            try:
+                lgpio.gpio_claim_output(gpio_handle, RELAY_PIN)
+            except Exception as e:
+                # If GPIO is already claimed, try to release and re-claim
+                if "GPIO busy" in str(e):
+                    print("GPIO already in use, trying to release and re-claim...")
+                    try:
+                        lgpio.gpio_free(gpio_handle, RELAY_PIN)
+                        lgpio.gpio_claim_output(gpio_handle, RELAY_PIN)
+                    except Exception as e2:
+                        print(f"Failed to re-claim GPIO: {e2}")
+                        gpio_handle = None
+                        return False
+                else:
+                    raise e
         return True
     except Exception as e:
         print(f"Error initializing GPIO: {e}")
@@ -180,6 +226,27 @@ def relay_off():
         return False
 
 # ---------- UTIL FUNCTIONS ----------
+# ---------- UTIL FUNCTIONS ----------
+def check_expired_sessions():
+    """Check for expired sessions and turn off relay if needed"""
+    now = datetime.now()
+    expired_keys = []
+    
+    for session_key, session_data in active_sessions.items():
+        expires_at = session_data.get('expires_at')
+        if expires_at and now.timestamp() > expires_at:
+            expired_keys.append(session_key)
+            # Turn off relay when session expires
+            relay_off()
+            print(f"Session {session_key} expired, relay turned off")
+    
+    # Remove expired sessions
+    for key in expired_keys:
+        if key in active_sessions:
+            del active_sessions[key]
+    
+    return expired_keys
+
 def list_serial_ports():
     if list_ports is None:
         return []
@@ -469,6 +536,29 @@ def reboot_device(device_id):
         device.last_seen = datetime.utcnow()
         db.session.commit()
         flash('Device reboot initiated', 'success')
+    else:
+        flash('Device not found', 'danger')
+    
+    return redirect(url_for('manage_devices'))
+
+@app.route('/admin/devices/toggle_status/<int:device_id>', methods=['POST'])
+@login_required
+def toggle_device_status(device_id):
+    """Toggle device between ONLINE and OFFLINE status"""
+    if not current_user.is_admin:
+        abort(403)
+    
+    device = Device.query.get(device_id)
+    if device:
+        # Toggle status
+        if device.status == 'ONLINE':
+            device.status = 'OFFLINE'
+        else:
+            device.status = 'ONLINE'
+        
+        device.last_seen = datetime.utcnow()
+        db.session.commit()
+        flash(f'Device {device.device_name} set to {device.status}', 'success')
     else:
         flash('Device not found', 'danger')
     
@@ -818,14 +908,36 @@ def update_system_metrics():
                 
                 if UPS_AVAILABLE:
                     try:
+                        # First try direct reading
                         battery_level = dfrobot_ups.read_soc()
                         battery_voltage = dfrobot_ups.read_voltage()
                         ac_status_str = dfrobot_ups.ac_status()
                         ac_status = ac_status_str == "AC_CONNECTED"
                         charging_status_str = dfrobot_ups.charging_status(ac_status_str, battery_voltage)
                         charging_status = charging_status_str == "CHARGING"
-                    except:
-                        pass
+                        
+                        # If GPIO not available (UNKNOWN), read from UPS log file
+                        if ac_status_str == "UNKNOWN":
+                            log_file = "/home/abhi/virtual_lab/ups_log.csv"
+                            if os.path.exists(log_file):
+                                with open(log_file, 'r') as f:
+                                    lines = f.readlines()
+                                    if len(lines) > 1:
+                                        last_line = lines[-1].strip()
+                                        parts = last_line.split(',')
+                                        if len(parts) >= 4:
+                                            ac_status_str = parts[3]
+                                            ac_status = ac_status_str == "AC_CONNECTED"
+                                            charging_status_str = parts[4] if len(parts) > 4 else "DISCHARGING"
+                                            charging_status = charging_status_str == "CHARGING"
+                        
+                        # If on battery, always show discharging
+                        if not ac_status:
+                            charging_status = False
+                        
+                        print(f"UPS read: SOC={battery_level}%, V={battery_voltage}, AC={ac_status_str}, CHG={charging_status_str}")
+                    except Exception as e:
+                        print(f"UPS read error: {e}")
                 
                 # Update main device metrics (assuming single device for now)
                 device = Device.query.first()
@@ -853,8 +965,8 @@ def update_system_metrics():
                     db.session.add(metric)
                     db.session.commit()
             
-            # Sleep for 60 seconds before next update
-            time.sleep(60)
+            # Sleep for 10 seconds before next update
+            time.sleep(10)
             
         except Exception as e:
             print(f"Error updating system metrics: {e}")
@@ -1062,6 +1174,9 @@ def experiment():
     if not session_key:
         return render_template('expired_session.html')
     
+    # Clean up any expired sessions and turn off relay
+    check_expired_sessions()
+    
     # First check if there's a booking with this session key
     booking = Booking.query.filter_by(session_key=session_key).first()
     
@@ -1137,8 +1252,12 @@ def toggle_relay():
     state = data.get('state')
     session_key = data.get('session_key')
     
+    # Check for expired sessions first and clean them up
+    check_expired_sessions()
+    
     # Check if session is valid
     if session_key not in active_sessions:
+        relay_off()  # Ensure relay is off for invalid/expired session
         return jsonify({'status': 'error', 'message': 'Invalid session'}), 400
     
     if state == 'on':
@@ -1230,13 +1349,6 @@ def book_experiment(exp_id):
         flash('Experiment not available', 'danger')
         return redirect(url_for('index'))
     
-    # Get available Lab Pis for this experiment
-    available_devices = Device.query.filter_by(status='ONLINE', maintenance_mode=False, current_booking_id=None).all()
-    experiment_devices = []
-    for device in available_devices:
-        if device.get_experiment_capabilities() and exp_id in device.get_experiment_capabilities():
-            experiment_devices.append(device)
-    
     if request.method == 'POST':
         print("DEBUG: Booking form submitted")
         print(f"DEBUG: Form data: {request.form}")
@@ -1244,7 +1356,6 @@ def book_experiment(exp_id):
         slot_date = request.form['slotDate']
         slot_time = request.form['slotTime']
         duration = int(request.form['duration'])
-        device_id = request.form.get('device_id', type=int)
         
         if duration > experiment.max_duration:
             flash(f'Maximum duration for this experiment is {experiment.max_duration} minutes', 'danger')
@@ -1286,24 +1397,6 @@ def book_experiment(exp_id):
         db.session.add(booking)
         db.session.commit()
         
-        # Assign a Lab Pi to the booking if selected
-        if device_id:
-            device = Device.query.get(device_id)
-            if device and device.is_available():
-                device.current_booking_id = booking.id
-                device.status = 'BUSY'
-                db.session.commit()
-                
-                log_entry = SystemLog(
-                    level='INFO',
-                    category='EXPERIMENT',
-                    message=f"Lab Pi '{device.device_name}' assigned to booking #{booking.id}",
-                    device_id=device.id,
-                    user_id=current_user.id
-                )
-                db.session.add(log_entry)
-                db.session.commit()
-        
         print(f"DEBUG: Booking created successfully: {booking}")
         print(f"DEBUG: Session key: {session_key}")
         
@@ -1316,7 +1409,6 @@ def book_experiment(exp_id):
             <p><strong>Time:</strong> {slot_time}</p>
             <p><strong>Duration:</strong> {duration} minutes</p>
             <p><strong>Session Key:</strong> {session_key}</p>
-            {'<p><strong>Lab Pi:</strong> ' + (Device.query.get(device_id).device_name if device_id else 'Auto-assigned') + '</p>' if device_id else '<p><strong>Lab Pi:</strong> Auto-assigned</p>'}
             <p>You will receive a reminder email 30 minutes before your session starts.</p>
         '''
         send_email(current_user.email, subject, template)
@@ -1324,7 +1416,7 @@ def book_experiment(exp_id):
         flash('Booking confirmed! Check your email for details.', 'success')
         return redirect(url_for('my_bookings'))
     
-    return render_template('book.html', experiment=experiment, available_devices=experiment_devices)
+    return render_template('book.html', experiment=experiment)
 
 @app.route('/my_bookings')
 @login_required
@@ -1425,8 +1517,18 @@ def flash_firmware():
     board = request.form.get('board', 'generic')
     port = request.form.get('port', '') or ''
     available_ports = list_serial_ports()
-    default_port = available_ports[0] if available_ports else '/dev/ttyUSB0'
-    port = port or default_port
+    
+    # Validate port - don't use default if no ports available
+    if not available_ports:
+        return jsonify({'status': 'No serial ports found. Please connect the ESP32 device.'}), 400
+    
+    # Validate provided port exists in available ports
+    if port and port not in available_ports:
+        return jsonify({'status': f'Port {port} not found. Available ports: {available_ports}'}), 400
+    
+    # Use first available port if none specified
+    port = port or available_ports[0]
+    
     fw = request.files.get('firmware')
     if not fw:
         return jsonify({'status': 'No firmware uploaded'}), 400
@@ -1434,15 +1536,21 @@ def flash_firmware():
     dest = os.path.join(UPLOAD_DIR, fname)
     fw.save(dest)
 
+    # Determine firmware file type based on extension
+    file_ext = os.path.splitext(fname)[1].lower()
+
+    # Improved flashing commands with proper options for reliability
+    # Key fixes: add baud rate, flash_size detect, and --after hard_reset
+    # Updated for esptool v5.x syntax (write-flash instead of write_flash)
     commands = {
-        'esp32': f"esptool.py --chip esp32 --port {port} write_flash 0x10000 {dest}",
-        'esp8266': f"esptool.py --port {port} write_flash 0x00000 {dest}",
-        'arduino': f"avrdude -v -p atmega328p -c arduino -P {port} -b115200 -D -U flash:w:{dest}:i",
-        'attiny': f"avrdude -v -p attiny85 -c usbasp -P {port} -U flash:w:{dest}:i",
+        'esp32': f"python3 -m esptool --chip esp32 --port {port} --baud 921600 write-flash 0x10000 {dest}",
+        'esp8266': f"python3 -m esptool --chip esp8266 --port {port} --baud 921600 write-flash 0x00000 {dest}",
+        'arduino': f"avrdude -v -p atmega328p -c arduino -P {port} -b115200 -D -U flash:w:{dest}:{ 'i' if file_ext == '.hex' else 'r' }",
+        'attiny': f"avrdude -v -p attiny85 -c usbasp -P {port} -U flash:w:{dest}:{ 'i' if file_ext == '.hex' else 'r' }",
         'stm32': f"openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c \"program {dest} 0x08000000 verify reset exit\"",
         'nucleo_f446re': f"openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c \"program {dest} 0x08000000 verify reset exit\"",
         'black_pill': f"openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c \"program {dest} 0x08000000 verify reset exit\"",
-        'msp430': f"mspdebug rf2500 'prog {dest}'",
+        'msp430': f"echo 'mspdebug not available. Please install mspdebug to flash MSP430 boards'",
         'tiva': f"openocd -f board/ti_ek-tm4c123gxl.cfg -c \"program {dest} verify reset exit\"",
         'tms320f28377s': f"python3 dsp/flash_tool.py {dest}",
         'generic': f"echo 'No flashing command configured for {board}. Uploaded to {dest}'"
@@ -1450,18 +1558,112 @@ def flash_firmware():
 
     cmd = commands.get(board, commands['generic'])
     socketio.start_background_task(run_flash_command, cmd, fname)
-    return jsonify({'status': f'Flashing started for {board}', 'command': cmd})
+    return jsonify({'status': f'Flashing started for {board}', 'command': cmd, 'port': port})
 
-def run_flash_command(cmd, filename=None):
+def run_flash_command(cmd, filename=None, timeout=180):
+    """Run flash command with timeout and better error handling"""
+    import select
+    import fcntl
+    import os
+    import signal
+    
     try:
         socketio.emit('flashing_status', f"Starting: {cmd}")
-        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in iter(p.stdout.readline, ''):
-            if line is None:
-                continue
-            socketio.emit('flashing_status', line.strip())
-        p.wait()
-        rc = p.returncode
+        
+        # Check if command contains 'echo' (which is always available)
+        if 'echo' in cmd:
+            p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        else:
+            # Check if command starts with a known available tool
+            tool = cmd.split()[0]
+            if tool not in ['avrdude', 'esptool', 'openocd', 'python3']:
+                socketio.emit('flashing_status', f'❌ Error: Tool {tool} not installed')
+                return
+            
+            # Extract port from command for cleanup (supports --port, -P, and openocd interfaces)
+            port_match = re.search(r'(?:--port|-P)\s+(\S+)', cmd)
+            if port_match:
+                port = port_match.group(1)
+                # Kill any existing processes using this port
+                try:
+                    result = subprocess.run(f'lsof -t {port}', shell=True, capture_output=True, text=True)
+                    if result.stdout.strip():
+                        pids = result.stdout.strip().split('\n')
+                        for pid in pids:
+                            try:
+                                os.kill(int(pid), signal.SIGKILL)
+                                socketio.emit('flashing_status', f'Cleaned up process {pid} using {port}')
+                            except:
+                                pass
+                        time.sleep(1)  # Wait for port to be released
+                except:
+                    pass
+            
+            # Also check for OpenOCD processes (used for STM32, Tiva, etc.)
+            if 'openocd' in cmd:
+                try:
+                    result = subprocess.run('pkill -9 -f openocd', shell=True, capture_output=True, text=True)
+                    time.sleep(0.5)
+                except:
+                    pass
+            
+            # Use subprocess with non-blocking output reading
+            p = subprocess.Popen(
+                cmd, 
+                shell=True, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT, 
+                text=True,
+                bufsize=1
+            )
+            
+            # Set non-blocking mode for stdout
+            fd = p.stdout.fileno()
+            fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+            
+            start_time = time.time()
+            output_lines = []
+            
+            while True:
+                # Check if process has finished
+                ret = p.poll()
+                
+                # Try to read any available output
+                try:
+                    line = p.stdout.readline()
+                    if line:
+                        socketio.emit('flashing_status', line.strip())
+                        output_lines.append(line)
+                except:
+                    pass
+                
+                # If process finished and no more output, exit loop
+                if ret is not None:
+                    # Wait a bit for any remaining output
+                    time.sleep(0.5)
+                    try:
+                        line = p.stdout.readline()
+                        while line:
+                            socketio.emit('flashing_status', line.strip())
+                            output_lines.append(line)
+                            line = p.stdout.readline()
+                    except:
+                        pass
+                    break
+                
+                # Check for timeout
+                if time.time() - start_time > timeout:
+                    p.kill()
+                    p.wait()
+                    socketio.emit('flashing_status', f'❌ Error: Flashing timed out after {timeout} seconds')
+                    return
+                
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.1)
+            
+            rc = p.returncode
+        
         msg = '✅ Flashing completed successfully' if rc == 0 else f'⚠️ Flashing ended with return code {rc}'
         socketio.emit('flashing_status', f'{msg} (file: {filename})')
     except Exception as e:
@@ -1495,26 +1697,39 @@ def factory_reset():
     if not os.path.isfile(fpath):
         return jsonify({'error': f'Default firmware not found for board {board}: expected {fpath}'}), 404
 
-    port = request.args.get('port') or ''
+    # Validate port - get from request or use first available
+    port = data.get('port') or ''
     available_ports = list_serial_ports()
-    default_port = available_ports[0] if available_ports else '/dev/ttyUSB0'
-    port = port or default_port
+    
+    if not available_ports:
+        return jsonify({'error': 'No serial ports found. Please connect the device.'}), 400
+    
+    # Validate provided port exists
+    if port and port not in available_ports:
+        return jsonify({'error': f'Port {port} not found. Available: {available_ports}'}), 400
+    
+    port = port or available_ports[0]
+    
+    # Determine firmware file type based on extension
+    file_ext = os.path.splitext(fname)[1].lower()
+
+    # Improved commands with proper options (esptool v5.x syntax)
     commands = {
-        'esp32': f"esptool.py --chip esp32 --port {port} write_flash 0x10000 {fpath}",
-        'esp8266': f"esptool.py --port {port} write_flash 0x00000 {fpath}",
-        'arduino': f"avrdude -v -p atmega328p -c arduino -P {port} -b115200 -D -U flash:w:{fpath}:i",
-        'attiny': f"avrdude -v -p attiny85 -c usbasp -P {port} -U flash:w:{fpath}:i",
+        'esp32': f"python3 -m esptool --chip esp32 --port {port} --baud 921600 write-flash 0x10000 {fpath}",
+        'esp8266': f"python3 -m esptool --chip esp8266 --port {port} --baud 921600 write-flash 0x00000 {fpath}",
+        'arduino': f"avrdude -v -p atmega328p -c arduino -P {port} -b115200 -D -U flash:w:{fpath}:{ 'i' if file_ext == '.hex' else 'r' }",
+        'attiny': f"avrdude -v -p attiny85 -c usbasp -P {port} -U flash:w:{fpath}:{ 'i' if file_ext == '.hex' else 'r' }",
         'stm32': f"openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c \"program {fpath} 0x08000000 verify reset exit\"",
         'nucleo_f446re': f"openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c \"program {fpath} 0x08000000 verify reset exit\"",
         'black_pill': f"openocd -f interface/stlink.cfg -f target/stm32f4x.cfg -c \"program {fpath} 0x08000000 verify reset exit\"",
-        'msp430': f"mspdebug rf2500 'prog {fpath}'",
+        'msp430': f"echo 'mspdebug not available. Please install mspdebug to flash MSP430 boards'",
         'tiva': f"openocd -f board/ti_ek-tm4c123gxl.cfg -c \"program {fpath} verify reset exit\"",
         'tms320f28377s': f"python3 dsp/flash_tool.py {fpath}",
         'generic': f"echo 'No flashing command configured for {board}. Default firmware at {fpath}'"
     }
     cmd = commands.get(board, commands['generic'])
     socketio.start_background_task(run_flash_command, cmd, fname)
-    return jsonify({'status': f'Factory reset started for {board}', 'command': cmd})
+    return jsonify({'status': f'Factory reset started for {board}', 'command': cmd, 'port': port})
 
 @app.route('/sop/<path:filename>')
 @login_required
@@ -1669,352 +1884,6 @@ def send_sensor_data_to_clients(data):
     except Exception as e:
         print("[ERROR] Failed to emit sensor_data:", e)
 
-# ---------- LAB PI API ENDPOINTS ----------
-@app.route('/api/lab/register', methods=['POST'])
-def register_lab_pi():
-    """Register a Lab Pi with Admin Pi"""
-    try:
-        data = request.get_json()
-        
-        # Validate API key
-        api_key = request.headers.get('X-API-Key')
-        if api_key != config.get('security.api_key'):
-            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
-        
-        mac_address = data.get('mac_address')
-        if not mac_address:
-            return jsonify({'success': False, 'message': 'MAC address required'}), 400
-        
-        # Check if device already registered
-        device = Device.query.filter_by(mac_address=mac_address).first()
-        if device:
-            # Update existing device
-            device.ip_address = data.get('ip_address', device.ip_address)
-            device.device_name = data.get('device_name', device.device_name)
-            device.device_type = data.get('device_type', device.device_type)
-            device.location = data.get('location', device.location)
-            device.experiment_capabilities = json.dumps(data.get('experiment_capabilities', []))
-            device.firmware_version = data.get('firmware_version', device.firmware_version)
-            device.hardware_version = data.get('hardware_version', device.hardware_version)
-            device.status = 'ONLINE'
-            device.last_seen = datetime.utcnow()
-            device.last_heartbeat = datetime.utcnow()
-        else:
-            # Create new device
-            device = Device(
-                mac_address=mac_address,
-                ip_address=data.get('ip_address'),
-                device_name=data.get('device_name', 'Unknown Lab Pi'),
-                device_type=data.get('device_type', 'raspberry-pi'),
-                location=data.get('location', 'Unknown'),
-                experiment_capabilities=json.dumps(data.get('experiment_capabilities', [])),
-                firmware_version=data.get('firmware_version', '1.0.0'),
-                hardware_version=data.get('hardware_version', 'RPi4'),
-                status='ONLINE',
-                last_seen=datetime.utcnow(),
-                last_heartbeat=datetime.utcnow()
-            )
-            db.session.add(device)
-        
-        db.session.commit()
-        
-        log_entry = SystemLog(
-            level='INFO',
-            category='SYSTEM',
-            message=f"Lab Pi registered/updated: {device.device_name} ({device.ip_address})",
-            device_id=device.id
-        )
-        db.session.add(log_entry)
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'device_id': device.id,
-            'message': 'Lab Pi registered successfully'
-        })
-    except Exception as e:
-        print(f"Error registering Lab Pi: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/lab/heartbeat', methods=['POST'])
-def lab_heartbeat():
-    """Handle Lab Pi heartbeat"""
-    try:
-        data = request.get_json()
-        
-        # Validate API key
-        api_key = request.headers.get('X-API-Key')
-        if api_key != config.get('security.api_key'):
-            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
-        
-        mac_address = data.get('mac_address')
-        if not mac_address:
-            return jsonify({'success': False, 'message': 'MAC address required'}), 400
-        
-        # Find device
-        device = Device.query.filter_by(mac_address=mac_address).first()
-        if not device:
-            # Auto-register device if not found
-            return register_lab_pi()
-        
-        # Update device information
-        device.ip_address = data.get('ip_address', device.ip_address)
-        device.status = data.get('status', 'ONLINE')
-        device.last_seen = datetime.utcnow()
-        device.last_heartbeat = datetime.utcnow()
-        
-        # Update system metrics if provided
-        if 'cpu_usage' in data:
-            device.cpu_usage = data.get('cpu_usage')
-        if 'ram_usage' in data:
-            device.ram_usage = data.get('ram_usage')
-        if 'temperature' in data:
-            device.temperature = data.get('temperature')
-        
-        # Create metric entry
-        metric = DeviceMetric(
-            device_id=device.id,
-            cpu_usage=device.cpu_usage,
-            ram_usage=device.ram_usage,
-            temperature=device.temperature
-        )
-        db.session.add(metric)
-        db.session.commit()
-        
-        return jsonify({'success': True, 'message': 'Heartbeat received'})
-    except Exception as e:
-        print(f"Error handling heartbeat: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/telemetry', methods=['POST'])
-def receive_telemetry():
-    """Receive telemetry data from Lab Pi"""
-    try:
-        data = request.get_json()
-        
-        # Validate API key
-        api_key = request.headers.get('X-API-Key')
-        if api_key != config.get('security.api_key'):
-            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
-        
-        mac_address = data.get('mac_address')
-        if not mac_address:
-            return jsonify({'success': False, 'message': 'MAC address required'}), 400
-        
-        # Find device
-        device = Device.query.filter_by(mac_address=mac_address).first()
-        if not device:
-            return jsonify({'success': False, 'message': 'Device not found'}), 404
-        
-        # TODO: Handle telemetry data (store in database, forward to WebSocket, etc.)
-        sensor_data = data.get('sensor_data', {})
-        timestamp = data.get('timestamp', datetime.utcnow().isoformat())
-        
-        # Forward telemetry to connected clients
-        socketio.emit('sensor_data', {
-            'device_id': device.id,
-            'device_name': device.device_name,
-            'timestamp': timestamp,
-            'data': sensor_data
-        })
-        
-        return jsonify({'success': True, 'message': 'Telemetry received'})
-    except Exception as e:
-        print(f"Error receiving telemetry: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/lab/send_command', methods=['POST'])
-def send_command_to_lab():
-    """Send a command to a specific Lab Pi"""
-    try:
-        data = request.get_json()
-        
-        # Validate API key
-        api_key = request.headers.get('X-API-Key')
-        if api_key != config.get('security.api_key'):
-            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
-        
-        device_id = data.get('device_id')
-        command = data.get('command')
-        
-        if not device_id or not command:
-            return jsonify({'success': False, 'message': 'Device ID and command required'}), 400
-        
-        # Find device
-        device = Device.query.get(device_id)
-        if not device:
-            return jsonify({'success': False, 'message': 'Device not found'}), 404
-        
-        # Send command to Lab Pi
-        lab_url = f"http://{device.ip_address}:5001/api/experiment/{command}"
-        response = requests.post(lab_url, json=data.get('params', {}), headers={'X-API-Key': config.get('security.api_key')})
-        
-        if response.status_code == 200:
-            return jsonify({'success': True, 'message': 'Command sent successfully', 'data': response.json()})
-        else:
-            return jsonify({'success': False, 'message': f'Failed to send command: {response.text}'}), response.status_code
-    except Exception as e:
-        print(f"Error sending command: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/lab/get_available', methods=['GET'])
-def get_available_labs():
-    """Get all available Lab Pis for a specific experiment"""
-    try:
-        experiment_id = request.args.get('experiment_id', type=int)
-        
-        # Get all online and available devices
-        devices = Device.query.filter_by(status='ONLINE', maintenance_mode=False, current_booking_id=None).all()
-        
-        if experiment_id:
-            # Filter devices that support the specified experiment
-            available_devices = []
-            for device in devices:
-                if device.get_experiment_capabilities() and experiment_id in device.get_experiment_capabilities():
-                    available_devices.append(device)
-        else:
-            available_devices = devices
-        
-        return jsonify({
-            'success': True,
-            'devices': [{
-                'id': device.id,
-                'name': device.device_name,
-                'type': device.device_type,
-                'ip_address': device.ip_address,
-                'location': device.location,
-                'capabilities': device.get_experiment_capabilities()
-            } for device in available_devices]
-        })
-    except Exception as e:
-        print(f"Error getting available labs: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/lab/assign', methods=['POST'])
-def assign_lab_to_booking():
-    """Assign a Lab Pi to a booking"""
-    try:
-        data = request.get_json()
-        
-        # Validate API key
-        api_key = request.headers.get('X-API-Key')
-        if api_key != config.get('security.api_key'):
-            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
-        
-        booking_id = data.get('booking_id')
-        device_id = data.get('device_id')
-        
-        if not booking_id or not device_id:
-            return jsonify({'success': False, 'message': 'Booking ID and Device ID required'}), 400
-        
-        # Find booking and device
-        booking = Booking.query.get(booking_id)
-        device = Device.query.get(device_id)
-        
-        if not booking or not device:
-            return jsonify({'success': False, 'message': 'Booking or device not found'}), 404
-        
-        # Check if device is available
-        if device.current_booking_id is not None or device.status != 'ONLINE' or device.maintenance_mode:
-            return jsonify({'success': False, 'message': 'Device is not available'}), 400
-        
-        # Assign device to booking
-        device.current_booking_id = booking_id
-        device.status = 'BUSY'
-        db.session.commit()
-        
-        log_entry = SystemLog(
-            level='INFO',
-            category='EXPERIMENT',
-            message=f"Lab Pi '{device.device_name}' assigned to booking #{booking_id}",
-            device_id=device.id
-        )
-        db.session.add(log_entry)
-        db.session.commit()
-        
-        return jsonify({'success': True, 'message': 'Lab Pi assigned successfully'})
-    except Exception as e:
-        print(f"Error assigning Lab Pi: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-@app.route('/api/lab/release', methods=['POST'])
-def release_lab_pi():
-    """Release a Lab Pi from a booking"""
-    try:
-        data = request.get_json()
-        
-        # Validate API key
-        api_key = request.headers.get('X-API-Key')
-        if api_key != config.get('security.api_key'):
-            return jsonify({'success': False, 'message': 'Invalid API key'}), 401
-        
-        booking_id = data.get('booking_id')
-        
-        if not booking_id:
-            return jsonify({'success': False, 'message': 'Booking ID required'}), 400
-        
-        # Find device with this booking
-        device = Device.query.filter_by(current_booking_id=booking_id).first()
-        
-        if not device:
-            return jsonify({'success': False, 'message': 'Device not found for this booking'}), 404
-        
-        # Release the device
-        device.current_booking_id = None
-        device.status = 'ONLINE'
-        db.session.commit()
-        
-        log_entry = SystemLog(
-            level='INFO',
-            category='EXPERIMENT',
-            message=f"Lab Pi '{device.device_name}' released from booking #{booking_id}",
-            device_id=device.id
-        )
-        db.session.add(log_entry)
-        db.session.commit()
-        
-        return jsonify({'success': True, 'message': 'Lab Pi released successfully'})
-    except Exception as e:
-        print(f"Error releasing Lab Pi: {e}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-# ---------- DEVICE MONITORING ----------
-def check_device_heartbeats():
-    """Check if any devices have expired heartbeats"""
-    while True:
-        try:
-            with app.app_context():
-                devices = Device.query.all()
-                for device in devices:
-                    if device.is_heartbeat_expired() and device.status != 'OFFLINE':
-                        device.status = 'OFFLINE'
-                        db.session.commit()
-                        log_entry = SystemLog(
-                            level='WARNING',
-                            category='SYSTEM',
-                            message=f"Lab Pi '{device.device_name}' is offline (heartbeat expired)",
-                            device_id=device.id
-                        )
-                        db.session.add(log_entry)
-                        db.session.commit()
-        
-            # Check every 30 seconds
-            time.sleep(30)
-        except Exception as e:
-            print(f"Error checking device heartbeats: {e}")
-            time.sleep(30)
-
-# Start device monitoring thread
-def start_device_monitoring():
-    if not hasattr(app, 'device_monitor_thread'):
-        app.device_monitor_thread = threading.Thread(target=check_device_heartbeats, daemon=True)
-        app.device_monitor_thread.start()
-        print("✅ Device heartbeat monitoring started")
-
-# Run device monitoring when the application starts
-with app.app_context():
-    start_device_monitoring()
-
 # ---------- MAIN ----------
 if __name__ == '__main__':
     import socket
@@ -2034,12 +1903,6 @@ if __name__ == '__main__':
     print("Virtual Lab Server Starting...")
     print("========================================")
 
-    # Check if we're in admin mode
-    if config.is_admin_pi():
-        print("✅ Admin Pi mode enabled")
-    else:
-        print("⚠️  Not running in Admin Pi mode")
-
     audio_running = check_port(9000, "Audio server")
     if not audio_running:
         print("\n⚠️  Audio service not detected!")
@@ -2049,7 +1912,10 @@ if __name__ == '__main__':
 
     print("\nStarting Flask server on port 5000...")
     print("========================================")
-
+    
+    # Start the session monitor background task
+    start_session_monitor()
+    
     try:
         socketio.run(app, host='0.0.0.0', port=5000)
     finally:

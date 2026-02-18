@@ -12,22 +12,45 @@ from datetime import datetime, timedelta
 BUS = 1
 ADDR = 0x36        # MAX17048
 
-# Try to import GPIO module
+# Try to import GPIO module - try lgpio first (used in main app), then gpiozero
 GPIO_AVAILABLE = False
+LGPIO_AVAILABLE = False
+AC_GPIO = 6  # GPIO6 = AC present
+lgpio_handle = None
+
 try:
-    from gpiozero import Button
-    
-    AC_GPIO = 6        # GPIO6 = AC present
-    # Use Button with pull_up=False to detect AC power
-    ac_button = Button(AC_GPIO, pull_up=False)
-    GPIO_AVAILABLE = True
-    print("✅ GPIO initialized successfully using gpiozero")
+    import lgpio
+    LGPIO_AVAILABLE = True
+    lgpio_handle = lgpio.gpiochip_open(0)
+    try:
+        lgpio.gpio_claim_input(lgpio_handle, AC_GPIO)
+        GPIO_AVAILABLE = True
+        print("✅ LGPIO initialized successfully")
+    except Exception as e:
+        # Try alternative claim method
+        try:
+            lgpio_handle = lgpio.gpiochip_open(0)
+            lgpio.gpio_claim_input(lgpio_handle, AC_GPIO, lgpio.SET_BIAS_DISABLE)
+            GPIO_AVAILABLE = True
+            print("✅ LGPIO initialized successfully (with bias)")
+        except Exception as e2:
+            print(f"⚠️ LGPIO GPIO claim failed: {e2}")
 except ImportError:
-    print("⚠️ gpiozero not available - Running in GPIO simulation mode")
-    GPIO_AVAILABLE = False
+    print("⚠️ lgpio not available")
 except Exception as e:
-    print(f"⚠️ GPIO initialization failed: {e} - Running in GPIO simulation mode")
-    GPIO_AVAILABLE = False
+    print(f"⚠️ LGPIO initialization failed: {e}")
+
+# Fallback to gpiozero if lgpio fails
+if not GPIO_AVAILABLE:
+    try:
+        from gpiozero import Button
+        ac_button = Button(AC_GPIO, pull_up=False)
+        GPIO_AVAILABLE = True
+        print("✅ GPIO initialized successfully using gpiozero")
+    except ImportError:
+        print("⚠️ gpiozero not available")
+    except Exception as e:
+        print(f"⚠️ GPIO initialization failed: {e}")
 
 bus = SMBus(BUS)
 
@@ -63,9 +86,39 @@ def read_voltage():
 
 def ac_status():
     if not GPIO_AVAILABLE:
-        return "SIMULATED_AC"
+        return "UNKNOWN"  # No GPIO available
     
     try:
+        # Use lgpio if available
+        if LGPIO_AVAILABLE and lgpio_handle:
+            try:
+                value = lgpio.gpio_read(lgpio_handle, AC_GPIO)
+                # lgpio.gpio_read returns an integer or tuple
+                # If level is 1, AC is connected (pin pulled high)
+                if isinstance(value, tuple):
+                    level = value[0]
+                else:
+                    level = value
+                return "AC_CONNECTED" if level == 1 else "ON_BATTERY"
+            except lgpio.error as e:
+                # GPIO might be busy, try to re-claim and read
+                if "not allocated" in str(e) or "busy" in str(e):
+                    try:
+                        lgpio.gpio_free(lgpio_handle, AC_GPIO)
+                        lgpio.gpio_claim_input(lgpio_handle, AC_GPIO)
+                        value = lgpio.gpio_read(lgpio_handle, AC_GPIO)
+                        if isinstance(value, tuple):
+                            level = value[0]
+                        else:
+                            level = value
+                        return "AC_CONNECTED" if level == 1 else "ON_BATTERY"
+                    except:
+                        return "UNKNOWN"
+                raise
+        
+        # Fallback to gpiozero
+        from gpiozero import Button
+        ac_button = Button(AC_GPIO, pull_up=False)
         return "AC_CONNECTED" if ac_button.is_pressed else "ON_BATTERY"
     except Exception as e:
         print(f"⚠️ GPIO read error: {e}")
@@ -147,8 +200,27 @@ def main():
     
     while True:
         try:
-            soc = read_soc()
-            voltage = read_voltage()
+            # Retry I2C reads up to 3 times
+            soc = None
+            voltage = None
+            for attempt in range(3):
+                try:
+                    soc = read_soc()
+                    voltage = read_voltage()
+                    break  # Success, exit retry loop
+                except IOError as e:
+                    if attempt < 2:
+                        print(f"⚠️ I2C read error, retrying... ({attempt+1}/3)")
+                        time.sleep(1)
+                    else:
+                        raise
+            
+            # If I2C failed, use last known values or defaults
+            if soc is None:
+                soc = 0.0
+            if voltage is None:
+                voltage = 0.0
+            
             ac = ac_status()
             chg = charging_status(ac, voltage)
             
@@ -174,7 +246,9 @@ def main():
             )
         
         except Exception as e:
-            print(f"❌ UPS read error: {e}", flush=True)
+            # Don't print error for I2C retries
+            if "retrying" not in str(e):
+                print(f"❌ UPS read error: {e}", flush=True)
         
         time.sleep(5)
 
